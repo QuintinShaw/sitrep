@@ -113,7 +113,7 @@ struct JoinView: View {
                 joining: joining,
                 error: error,
                 scannerControl: scannerControl,
-                onCode: { code in Task { await join(payload: code) } }
+                onCode: { code in beginJoin(payload: code) }
             )
         case .manual:
             ManualJoinView(
@@ -122,7 +122,7 @@ struct JoinView: View {
                 error: error,
                 canSubmit: canSubmit,
                 onPaste: pasteCode,
-                onSubmit: { Task { await join(payload: manualCode) } }
+                onSubmit: { beginJoin(payload: manualCode) }
             )
         }
     }
@@ -153,6 +153,21 @@ struct JoinView: View {
     /// sitrep://join link (self-host path).
     private func join(payload: String) async {
         guard !joining else { return }
+        joining = true
+        error = nil
+        await resolveJoin(payload: payload)
+    }
+
+    /// Switch the UI to its progress state in the same main-actor turn as
+    /// the scanner callback, before URL parsing or any network work begins.
+    private func beginJoin(payload: String) {
+        guard !joining else { return }
+        joining = true
+        error = nil
+        Task { await resolveJoin(payload: payload) }
+    }
+
+    private func resolveJoin(payload: String) async {
         let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
         if let code = ConnectCode.parse(trimmed) {
             await performJoin(
@@ -170,12 +185,11 @@ struct JoinView: View {
             await performJoin(server: serverURL, space: space, code: code)
             return
         }
+        joining = false
         error = "无法识别的连接码"
     }
 
     private func performJoin(server: URL, space: String?, code: String) async {
-        joining = true
-        error = nil
         defer { joining = false }
         do {
             let joined = try await APIClient.join(
@@ -371,18 +385,50 @@ struct CodeScanner: UIViewControllerRepresentable {
             // Latin-only OCR: skipping the CJK text model is the single
             // biggest speed win; the code alphabet is pure A-Z/2-9.
             recognizedDataTypes: [.text(languages: ["en-US"])],
-            qualityLevel: .balanced,
+            qualityLevel: .fast,
             recognizesMultipleItems: true,
-            isHighlightingEnabled: true
+            isHighFrameRateTrackingEnabled: true,
+            isPinchToZoomEnabled: true,
+            isGuidanceEnabled: false,
+            isHighlightingEnabled: false
         )
         vc.delegate = context.coordinator
         context.coordinator.scanner = vc
         control?.coordinator = context.coordinator
         try? vc.startScanning()
+        Task { @MainActor [weak vc] in
+            // SwiftUI lays out the hosted controller after creation. Yield
+            // once so the ROI is calculated from the final camera bounds.
+            await Task.yield()
+            guard let vc else { return }
+            Self.updateRegionOfInterest(vc)
+        }
         return vc
     }
 
-    func updateUIViewController(_ vc: DataScannerViewController, context: Context) {}
+    func updateUIViewController(_ vc: DataScannerViewController, context: Context) {
+        Self.updateRegionOfInterest(vc)
+    }
+
+    @MainActor
+    private static func updateRegionOfInterest(_ vc: DataScannerViewController) {
+        let bounds = vc.view.bounds
+        guard bounds.width > 0, bounds.height > 0 else { return }
+
+        // Match the visible reticle while leaving enough vertical tolerance
+        // for OCR bounding-box drift. VisionKit ignores unrelated page text.
+        let width = min(max(bounds.width - 40, 0), 340)
+        let height = min(max(bounds.height * 0.18, 100), 150)
+        let region = CGRect(
+            x: bounds.midX - width / 2,
+            y: bounds.midY - height / 2,
+            width: width,
+            height: height
+        )
+        if vc.regionOfInterest != region {
+            vc.regionOfInterest = region
+        }
+    }
 
     static func dismantleUIViewController(_ vc: DataScannerViewController, coordinator: Coordinator) {
         vc.stopScanning()
@@ -420,8 +466,8 @@ struct CodeScanner: UIViewControllerRepresentable {
                 if let match = candidate.firstMatch(of: ConnectCode.scanPattern),
                    !rejected.contains(String(match.output)) {
                     fired = true
-                    scanner?.stopScanning() // one shot; also stops the camera work
                     onCode(String(match.output))
+                    scanner?.stopScanning() // one shot; also stops the camera work
                     return
                 }
             }
