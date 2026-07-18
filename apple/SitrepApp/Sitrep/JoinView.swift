@@ -39,10 +39,6 @@ struct JoinView: View {
             Spacer()
 
             VStack(spacing: 12) {
-                Label("相机仅在你选择扫描后启用", systemImage: "hand.raised.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-
                 Button {
                     present(.scanner)
                 } label: {
