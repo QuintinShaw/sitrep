@@ -1,0 +1,22 @@
+{
+  "name": "@sitrep/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:node": "node --experimental-strip-types src/adapters/node.ts",
+    "test": "node --experimental-strip-types --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.12.30"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.19.0",
+    "@types/node": "^26.1.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.112.0"
+  }
+}

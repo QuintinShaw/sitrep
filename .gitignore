@@ -1,0 +1,26 @@
+# Go
+daemon/bin/
+*.test
+
+# Node
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+
+# Apple
+apple/**/.build/
+apple/**/build/
+apple/**/xcuserdata/
+apple/**/DerivedData/
+*.xcuserstate
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# secrets
+*.p8
+.env

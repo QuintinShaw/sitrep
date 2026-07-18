@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/QuintinShaw/sitrep/proto/schema/event.schema.json",
+  "title": "SitrepEvent",
+  "description": "A single parsed protocol event as sent from daemon to server.",
+  "type": "object",
+  "required": ["kind", "source_id", "ts"],
+  "properties": {
+    "kind": {
+      "enum": [
+        "task.start",
+        "task.progress",
+        "task.step",
+        "task.done",
+        "task.fail",
+        "metric.update",
+        "message.send"
+      ]
+    },
+    "source_id": {
+      "type": "string",
+      "description": "Daemon-assigned task run id or a-prefixed automation id."
+    },
+    "ts": { "type": "string", "format": "date-time" },
+    "title": { "type": "string", "maxLength": 200 },
+    "percent": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "step": { "type": "string", "maxLength": 500 },
+    "key": { "type": "string", "pattern": "^[a-z0-9_.-]{1,64}$" },
+    "value": { "type": "string", "maxLength": 256 },
+    "label": { "type": "string", "maxLength": 100 },
+    "text": { "type": "string", "maxLength": 1000 },
+    "level": { "enum": ["info", "warn", "error"] }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,76 @@
+# XcodeGen spec — regenerate the project with:  xcodegen -s project.yml
+name: Sitrep
+options:
+  bundleIdPrefix: dev.sitrep
+  deploymentTarget:
+    iOS: "17.2"   # push-to-start Live Activities require 17.2+
+packages:
+  SitrepKit:
+    path: ../SitrepKit
+# Manual signing: profiles are created/renewed headlessly via the ASC API
+# (see docs/troubleshooting.md) — xcodebuild's own provisioning auth is
+# unreliable in this environment.
+settings:
+  base:
+    DEVELOPMENT_TEAM: 45GZZAYJSK
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Apple Development"
+    SWIFT_VERSION: "6.0"
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+targets:
+  Sitrep:
+    type: application
+    platform: iOS
+    sources:
+      - Sitrep
+      - Shared
+    dependencies:
+      - package: SitrepKit
+      - target: SitrepWidgets
+    info:
+      path: Sitrep/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSCameraUsageDescription: 扫描 Mac 上的连接码以加入你的空间
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.sitrep.app
+            CFBundleURLSchemes: [sitrep]
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        ITSAppUsesNonExemptEncryption: false
+    entitlements:
+      path: Sitrep/Sitrep.entitlements
+      properties:
+        aps-environment: development
+        com.apple.developer.usernotifications.time-sensitive: true
+        com.apple.security.application-groups:
+          - group.dev.sitrep.app
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.sitrep.app
+        PROVISIONING_PROFILE_SPECIFIER: sitrep-app-dev
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  SitrepWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - SitrepWidgets
+      - Shared
+    dependencies:
+      - package: SitrepKit
+    entitlements:
+      path: SitrepWidgets/SitrepWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.dev.sitrep.app
+    info:
+      path: SitrepWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Sitrep Widgets
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.sitrep.app.widgets
+        PROVISIONING_PROFILE_SPECIFIER: sitrep-widgets-dev

@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      daemon: ${{ steps.filter.outputs.daemon }}
+      server: ${{ steps.filter.outputs.server }}
+      apple: ${{ steps.filter.outputs.apple }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            daemon:
+              - 'daemon/**'
+              - 'proto/**'
+            server:
+              - 'server/**'
+              - 'proto/**'
+            apple:
+              - 'apple/**'
+              - 'proto/**'
+
+  daemon:
+    needs: changes
+    if: needs.changes.outputs.daemon == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+      - run: go build ./... && go vet ./... && go test ./...
+        working-directory: daemon
+      - name: cross-compile check
+        run: |
+          GOOS=windows GOARCH=amd64 go build ./...
+          GOOS=linux GOARCH=arm64 go build ./...
+        working-directory: daemon
+
+  server:
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+        working-directory: server
+      - run: npm run typecheck
+        working-directory: server
+
+  apple:
+    needs: changes
+    if: needs.changes.outputs.apple == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+        working-directory: apple/SitrepKit

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sitrep"
+  short_description: "把电脑任务、实时指标和重要事件可靠同步到 iPhone 与 Mac"
+  default_prompt: "Use $sitrep to turn my monitoring request into a verified task, metric, message, or scheduled automation."

@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sitrep-server",
+  "main": "src/adapters/workers.ts",
+  "compatibility_date": "2026-07-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "routes": [{ "pattern": "sitrep.quintinshaw.com", "custom_domain": true }],
+  "kv_namespaces": [{ "binding": "INVITE_DIR", "id": "490111734d5246cc949f0eec1c0ca0f3" }],
+  "vars": {
+    "APNS_BUNDLE_ID": "dev.sitrep.app",
+    "APNS_HOST": "api.sandbox.push.apple.com"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "USER_STORE", "class_name": "UserStore" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserStore"] }]
+}

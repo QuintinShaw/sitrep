@@ -1,0 +1,584 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00D77EC14FBC5E7E5EAE4573 /* MetricDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A26A70342FAAE64EBA10F76 /* MetricDetailView.swift */; };
+		08CC59F67044261B2534EA9E /* SitrepApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 039B90143B780B9222E58DCC /* SitrepApp.swift */; };
+		0FA5E8AB77994E85AC74AE45 /* SharedConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18B85091484B93BFA98FE456 /* SharedConfig.swift */; };
+		115A39F1D929E72D49050A5A /* SparklineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F24ADFAC3BACA173F42F71D /* SparklineView.swift */; };
+		278445EC6CC881F635D31CB6 /* JoinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD095289765BAF9B6749CA82 /* JoinView.swift */; };
+		2EA00C842DC67B9DC40E1AD3 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 917DDBAF12EB6C700606B708 /* MainTabView.swift */; };
+		354EF552C582E09968D8711A /* AutomationLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B69E381190F9E794E578DC15 /* AutomationLibraryView.swift */; };
+		35AECB1A126D7878891227D2 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2C2E636D28FE99801289B20 /* HistoryView.swift */; };
+		372F7BAF099A9D81B26C3E6A /* SitrepKit in Frameworks */ = {isa = PBXBuildFile; productRef = 86BA3FEC2314432AABCEF78B /* SitrepKit */; };
+		3B643E7F0DA1177A69B6EEFA /* MultiMetricWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02974A22EB85D90850E0415 /* MultiMetricWidget.swift */; };
+		6073F21BF86009582A4BB06C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B5431AEAE097D330719AC918 /* Assets.xcassets */; };
+		695F8173029D86A3E49332DC /* SitrepWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D194482A6E04734619A74511 /* SitrepWidgetBundle.swift */; };
+		773E5135CA633400D6418961 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12FAD837A84A50BB7FF2FC77 /* KeychainStore.swift */; };
+		788623A20B9B43AC121698C4 /* TaskActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F82D5B309D204B2759E6497 /* TaskActivityAttributes.swift */; };
+		814A03ABE7079DD00DE8D534 /* TaskListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A60EB3570FEBA38C3C0356 /* TaskListView.swift */; };
+		82A737CBC18DF086AD489A5E /* TaskDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73CD809C5021A51A41FDF617 /* TaskDetailView.swift */; };
+		881FDDBC6FC364CBF49F2E2B /* PushRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8B3185952B9A72045EC1E7C /* PushRegistrar.swift */; };
+		8C7FF5A7969727D82FACA8DE /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F0FE7F60DC580B0FD640B2 /* DashboardView.swift */; };
+		A7E69B9464716F7A95258649 /* SitrepKit in Frameworks */ = {isa = PBXBuildFile; productRef = 1364419F161A596168319466 /* SitrepKit */; };
+		A8C9B18520FD2A7264249CE6 /* TaskActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F82D5B309D204B2759E6497 /* TaskActivityAttributes.swift */; };
+		AD7F0C9A5D151681AB790753 /* SharedConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18B85091484B93BFA98FE456 /* SharedConfig.swift */; };
+		CE9C2777A48EE5B9196A78F1 /* NowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBAABE6A8B59B22002270B4A /* NowView.swift */; };
+		D4CA4EC255E051F38F49BDA7 /* SparklineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F24ADFAC3BACA173F42F71D /* SparklineView.swift */; };
+		D5D1EF520ACE378EDD122325 /* MetricsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 563733049938B9B4221DE390 /* MetricsWidget.swift */; };
+		D8C6413ED6424EDD72959D52 /* SitrepWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7E90EF307DD1D1F258C101DF /* SitrepWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		F0B93225CBB724C53EA6B77F /* SingleMetricWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B102FFD38CF7F72F3E28EC7 /* SingleMetricWidget.swift */; };
+		FEE51C6CD0B1D297DB4490CE /* TaskLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7716E7D88515A58D6339B69A /* TaskLiveActivity.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		78D8CCF13A8F76405075EF96 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4B4A9AE86B2A66F471DF108A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B199B126FC8D16BDBF942D7A;
+			remoteInfo = SitrepWidgets;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		08A74E04F2DF7358AFAD484D /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				D8C6413ED6424EDD72959D52 /* SitrepWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		039B90143B780B9222E58DCC /* SitrepApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitrepApp.swift; sourceTree = "<group>"; };
+		07F0FE7F60DC580B0FD640B2 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		12FAD837A84A50BB7FF2FC77 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		144B8FFD10C591E993D78768 /* SitrepWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SitrepWidgets.entitlements; sourceTree = "<group>"; };
+		18B85091484B93BFA98FE456 /* SharedConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedConfig.swift; sourceTree = "<group>"; };
+		1B102FFD38CF7F72F3E28EC7 /* SingleMetricWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleMetricWidget.swift; sourceTree = "<group>"; };
+		27A60EB3570FEBA38C3C0356 /* TaskListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskListView.swift; sourceTree = "<group>"; };
+		563733049938B9B4221DE390 /* MetricsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricsWidget.swift; sourceTree = "<group>"; };
+		5F24ADFAC3BACA173F42F71D /* SparklineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparklineView.swift; sourceTree = "<group>"; };
+		6F82D5B309D204B2759E6497 /* TaskActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActivityAttributes.swift; sourceTree = "<group>"; };
+		73CD809C5021A51A41FDF617 /* TaskDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskDetailView.swift; sourceTree = "<group>"; };
+		7716E7D88515A58D6339B69A /* TaskLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskLiveActivity.swift; sourceTree = "<group>"; };
+		7E90EF307DD1D1F258C101DF /* SitrepWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SitrepWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		8A26A70342FAAE64EBA10F76 /* MetricDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricDetailView.swift; sourceTree = "<group>"; };
+		90C4DC61D6458334A0898807 /* SitrepKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SitrepKit; path = ../SitrepKit; sourceTree = SOURCE_ROOT; };
+		917DDBAF12EB6C700606B708 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
+		A69A235C37F6995E324D4064 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		AD095289765BAF9B6749CA82 /* JoinView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinView.swift; sourceTree = "<group>"; };
+		B5431AEAE097D330719AC918 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B69E381190F9E794E578DC15 /* AutomationLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationLibraryView.swift; sourceTree = "<group>"; };
+		BBAABE6A8B59B22002270B4A /* NowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowView.swift; sourceTree = "<group>"; };
+		C02974A22EB85D90850E0415 /* MultiMetricWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiMetricWidget.swift; sourceTree = "<group>"; };
+		C2C2E636D28FE99801289B20 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		C2EC7DF01BD9AD479DAD9A5C /* Sitrep.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Sitrep.entitlements; sourceTree = "<group>"; };
+		D194482A6E04734619A74511 /* SitrepWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitrepWidgetBundle.swift; sourceTree = "<group>"; };
+		D82683F16D2EE0E3B86C148D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		F64F576A40B108C36D6B4CE7 /* Sitrep.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Sitrep.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F8B3185952B9A72045EC1E7C /* PushRegistrar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrar.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		31FE1721369F6CB51EC63941 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A7E69B9464716F7A95258649 /* SitrepKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F297BA82674BCBFC2E1CCA8C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				372F7BAF099A9D81B26C3E6A /* SitrepKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		48F2F0BA69C9CD93E18DEB1A = {
+			isa = PBXGroup;
+			children = (
+				FEB78148FC1FC7043DD7C2DA /* Packages */,
+				70B067A5C53BDEB8185D5963 /* Shared */,
+				567CBE7492EFC7084A597D76 /* Sitrep */,
+				D72BEB7AFB17DC28D84B616A /* SitrepWidgets */,
+				490D4C6854541013E6FE1B6B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		490D4C6854541013E6FE1B6B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F64F576A40B108C36D6B4CE7 /* Sitrep.app */,
+				7E90EF307DD1D1F258C101DF /* SitrepWidgets.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		567CBE7492EFC7084A597D76 /* Sitrep */ = {
+			isa = PBXGroup;
+			children = (
+				B5431AEAE097D330719AC918 /* Assets.xcassets */,
+				B69E381190F9E794E578DC15 /* AutomationLibraryView.swift */,
+				07F0FE7F60DC580B0FD640B2 /* DashboardView.swift */,
+				C2C2E636D28FE99801289B20 /* HistoryView.swift */,
+				A69A235C37F6995E324D4064 /* Info.plist */,
+				AD095289765BAF9B6749CA82 /* JoinView.swift */,
+				12FAD837A84A50BB7FF2FC77 /* KeychainStore.swift */,
+				917DDBAF12EB6C700606B708 /* MainTabView.swift */,
+				8A26A70342FAAE64EBA10F76 /* MetricDetailView.swift */,
+				BBAABE6A8B59B22002270B4A /* NowView.swift */,
+				F8B3185952B9A72045EC1E7C /* PushRegistrar.swift */,
+				C2EC7DF01BD9AD479DAD9A5C /* Sitrep.entitlements */,
+				039B90143B780B9222E58DCC /* SitrepApp.swift */,
+				73CD809C5021A51A41FDF617 /* TaskDetailView.swift */,
+				27A60EB3570FEBA38C3C0356 /* TaskListView.swift */,
+			);
+			path = Sitrep;
+			sourceTree = "<group>";
+		};
+		70B067A5C53BDEB8185D5963 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				18B85091484B93BFA98FE456 /* SharedConfig.swift */,
+				5F24ADFAC3BACA173F42F71D /* SparklineView.swift */,
+				6F82D5B309D204B2759E6497 /* TaskActivityAttributes.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		D72BEB7AFB17DC28D84B616A /* SitrepWidgets */ = {
+			isa = PBXGroup;
+			children = (
+				D82683F16D2EE0E3B86C148D /* Info.plist */,
+				563733049938B9B4221DE390 /* MetricsWidget.swift */,
+				C02974A22EB85D90850E0415 /* MultiMetricWidget.swift */,
+				1B102FFD38CF7F72F3E28EC7 /* SingleMetricWidget.swift */,
+				D194482A6E04734619A74511 /* SitrepWidgetBundle.swift */,
+				144B8FFD10C591E993D78768 /* SitrepWidgets.entitlements */,
+				7716E7D88515A58D6339B69A /* TaskLiveActivity.swift */,
+			);
+			path = SitrepWidgets;
+			sourceTree = "<group>";
+		};
+		FEB78148FC1FC7043DD7C2DA /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				90C4DC61D6458334A0898807 /* SitrepKit */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		521BDB5FFAF811F679F578B7 /* Sitrep */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8A29C08604C4287EF795C0AD /* Build configuration list for PBXNativeTarget "Sitrep" */;
+			buildPhases = (
+				CA5C099B8C776715705527D2 /* Sources */,
+				9D45203EF4C9D50B3F06CEA4 /* Resources */,
+				F297BA82674BCBFC2E1CCA8C /* Frameworks */,
+				08A74E04F2DF7358AFAD484D /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				277FE09CC2E26383EB8AFD49 /* PBXTargetDependency */,
+			);
+			name = Sitrep;
+			packageProductDependencies = (
+				86BA3FEC2314432AABCEF78B /* SitrepKit */,
+			);
+			productName = Sitrep;
+			productReference = F64F576A40B108C36D6B4CE7 /* Sitrep.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B199B126FC8D16BDBF942D7A /* SitrepWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3909B178D4D8DFFA0FFB8BB3 /* Build configuration list for PBXNativeTarget "SitrepWidgets" */;
+			buildPhases = (
+				EDE19682E707F9D393F46E93 /* Sources */,
+				31FE1721369F6CB51EC63941 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SitrepWidgets;
+			packageProductDependencies = (
+				1364419F161A596168319466 /* SitrepKit */,
+			);
+			productName = SitrepWidgets;
+			productReference = 7E90EF307DD1D1F258C101DF /* SitrepWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		4B4A9AE86B2A66F471DF108A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					521BDB5FFAF811F679F578B7 = {
+						DevelopmentTeam = 45GZZAYJSK;
+						ProvisioningStyle = Manual;
+					};
+					B199B126FC8D16BDBF942D7A = {
+						DevelopmentTeam = 45GZZAYJSK;
+						ProvisioningStyle = Manual;
+					};
+				};
+			};
+			buildConfigurationList = A7C27B466FEE53F33F20D358 /* Build configuration list for PBXProject "Sitrep" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 48F2F0BA69C9CD93E18DEB1A;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				87D704BCFC6BD54C7EBA7D5C /* XCLocalSwiftPackageReference "../SitrepKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 490D4C6854541013E6FE1B6B /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				521BDB5FFAF811F679F578B7 /* Sitrep */,
+				B199B126FC8D16BDBF942D7A /* SitrepWidgets */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		9D45203EF4C9D50B3F06CEA4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6073F21BF86009582A4BB06C /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CA5C099B8C776715705527D2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				354EF552C582E09968D8711A /* AutomationLibraryView.swift in Sources */,
+				8C7FF5A7969727D82FACA8DE /* DashboardView.swift in Sources */,
+				35AECB1A126D7878891227D2 /* HistoryView.swift in Sources */,
+				278445EC6CC881F635D31CB6 /* JoinView.swift in Sources */,
+				773E5135CA633400D6418961 /* KeychainStore.swift in Sources */,
+				2EA00C842DC67B9DC40E1AD3 /* MainTabView.swift in Sources */,
+				00D77EC14FBC5E7E5EAE4573 /* MetricDetailView.swift in Sources */,
+				CE9C2777A48EE5B9196A78F1 /* NowView.swift in Sources */,
+				881FDDBC6FC364CBF49F2E2B /* PushRegistrar.swift in Sources */,
+				AD7F0C9A5D151681AB790753 /* SharedConfig.swift in Sources */,
+				08CC59F67044261B2534EA9E /* SitrepApp.swift in Sources */,
+				115A39F1D929E72D49050A5A /* SparklineView.swift in Sources */,
+				788623A20B9B43AC121698C4 /* TaskActivityAttributes.swift in Sources */,
+				82A737CBC18DF086AD489A5E /* TaskDetailView.swift in Sources */,
+				814A03ABE7079DD00DE8D534 /* TaskListView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EDE19682E707F9D393F46E93 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D5D1EF520ACE378EDD122325 /* MetricsWidget.swift in Sources */,
+				3B643E7F0DA1177A69B6EEFA /* MultiMetricWidget.swift in Sources */,
+				0FA5E8AB77994E85AC74AE45 /* SharedConfig.swift in Sources */,
+				F0B93225CBB724C53EA6B77F /* SingleMetricWidget.swift in Sources */,
+				695F8173029D86A3E49332DC /* SitrepWidgetBundle.swift in Sources */,
+				D4CA4EC255E051F38F49BDA7 /* SparklineView.swift in Sources */,
+				A8C9B18520FD2A7264249CE6 /* TaskActivityAttributes.swift in Sources */,
+				FEE51C6CD0B1D297DB4490CE /* TaskLiveActivity.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		277FE09CC2E26383EB8AFD49 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B199B126FC8D16BDBF942D7A /* SitrepWidgets */;
+			targetProxy = 78D8CCF13A8F76405075EF96 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		3AB4A9A5E0C3BFD15F890F10 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SitrepWidgets/SitrepWidgets.entitlements;
+				INFOPLIST_FILE = SitrepWidgets/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sitrep.app.widgets;
+				PROVISIONING_PROFILE_SPECIFIER = "sitrep-widgets-dev";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		67A3B6B18B19C83E7B0413D7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sitrep/Sitrep.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Sitrep/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sitrep.app;
+				PROVISIONING_PROFILE_SPECIFIER = "sitrep-app-dev";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		7ED52ECAA96C94F73DD6AC87 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sitrep/Sitrep.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Sitrep/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sitrep.app;
+				PROVISIONING_PROFILE_SPECIFIER = "sitrep-app-dev";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		908A2836B15091B745D5BD07 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SitrepWidgets/SitrepWidgets.entitlements;
+				INFOPLIST_FILE = SitrepWidgets/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.sitrep.app.widgets;
+				PROVISIONING_PROFILE_SPECIFIER = "sitrep-widgets-dev";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		96826FBADF3B3AB99C780E7A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 45GZZAYJSK;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		E8BD8B708C5CBB57AD64DCC4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 45GZZAYJSK;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3909B178D4D8DFFA0FFB8BB3 /* Build configuration list for PBXNativeTarget "SitrepWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				908A2836B15091B745D5BD07 /* Debug */,
+				3AB4A9A5E0C3BFD15F890F10 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		8A29C08604C4287EF795C0AD /* Build configuration list for PBXNativeTarget "Sitrep" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7ED52ECAA96C94F73DD6AC87 /* Debug */,
+				67A3B6B18B19C83E7B0413D7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A7C27B466FEE53F33F20D358 /* Build configuration list for PBXProject "Sitrep" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				96826FBADF3B3AB99C780E7A /* Debug */,
+				E8BD8B708C5CBB57AD64DCC4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		87D704BCFC6BD54C7EBA7D5C /* XCLocalSwiftPackageReference "../SitrepKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../SitrepKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		1364419F161A596168319466 /* SitrepKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SitrepKit;
+		};
+		86BA3FEC2314432AABCEF78B /* SitrepKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SitrepKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 4B4A9AE86B2A66F471DF108A /* Project object */;
+}
