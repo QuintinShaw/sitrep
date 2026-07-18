@@ -16,31 +16,62 @@ final class ScannerControl {
 }
 
 struct JoinView: View {
+    private enum Destination: String, Identifiable {
+        case scanner
+        case manual
+
+        var id: String { rawValue }
+    }
+
     @Bindable var model: AppModel
     @State private var manualCode = ""
     @State private var error: String?
     @State private var joining = false
     @State private var scannerControl = ScannerControl()
-    @FocusState private var codeFieldFocused: Bool
+    @State private var destination: Destination?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                header
-                    .padding(.top, 28)
+        VStack(spacing: 0) {
+            Spacer(minLength: 32)
 
-                scanner
-                    .padding(.top, 30)
+            header
 
-                manualEntry
-                    .padding(.top, 20)
+            Spacer()
+
+            VStack(spacing: 12) {
+                Label("相机仅在你选择扫描后启用", systemImage: "hand.raised.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    present(.scanner)
+                } label: {
+                    Label("扫描连接码", systemImage: "camera.viewfinder")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                Button {
+                    present(.manual)
+                } label: {
+                    Label("手动输入连接码", systemImage: "keyboard")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 32)
+            .buttonBorderShape(.roundedRectangle(radius: 18))
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 12)
         }
-        .scrollDismissesKeyboard(.interactively)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 20)
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .interactiveDismissDisabled()
+        .sheet(item: $destination) { destination in
+            destinationView(destination)
+        }
         .task(id: model.pendingJoinPayload) {
             guard let payload = model.pendingJoinPayload else { return }
             model.pendingJoinPayload = nil
@@ -55,146 +86,49 @@ struct JoinView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 18) {
             Image(systemName: "macbook.and.iphone")
-                .font(.largeTitle)
+                .font(.system(size: 46))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(.blue)
-                .padding(18)
-                .background(.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 24))
+                .padding(24)
+                .background(.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 28))
 
-            VStack(spacing: 8) {
+            VStack(spacing: 10) {
                 Text("连接 Mac")
                     .font(.largeTitle.bold())
 
-                Text("在 Mac 菜单栏打开 Sitrep，选择「添加设备」，\n然后扫描它显示的连接码。")
+                Text("在 Mac 菜单栏打开 Sitrep 并选择「添加设备」，再选择一种连接方式。")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 340)
             }
         }
         .frame(maxWidth: .infinity)
     }
 
-    @ViewBuilder private var scanner: some View {
-        if DataScannerViewController.isSupported {
-            ZStack {
-                CodeScanner(control: scannerControl) { text in
-                    guard !joining else { return }
-                    Task { await join(payload: text) }
-                }
-
-                LinearGradient(
-                    colors: [.black.opacity(0.24), .clear, .black.opacity(0.32)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(
-                        .white.opacity(0.9),
-                        style: StrokeStyle(lineWidth: 2, dash: [10, 7])
-                    )
-                    .frame(maxWidth: 270)
-                    .aspectRatio(4.6, contentMode: .fit)
-                    .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
-
-                VStack {
-                    Spacer()
-                    Label("将连接码放入框内", systemImage: "viewfinder")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .padding(.bottom, 14)
-                }
-
-                if joining {
-                    Rectangle()
-                        .fill(.regularMaterial)
-                    ProgressView("正在连接…")
-                        .font(.headline)
-                }
-            }
-            .aspectRatio(1.45, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 28))
-            .overlay {
-                RoundedRectangle(cornerRadius: 28)
-                    .stroke(Color(.separator).opacity(0.45), lineWidth: 0.5)
-            }
-            .accessibilityLabel("连接码扫描器")
-        } else {
-            ContentUnavailableView(
-                "无法使用相机扫描",
-                systemImage: "camera.fill",
-                description: Text("请在下方粘贴或输入连接码")
+    @ViewBuilder
+    private func destinationView(_ destination: Destination) -> some View {
+        switch destination {
+        case .scanner:
+            ScannerJoinView(
+                joining: joining,
+                error: error,
+                scannerControl: scannerControl,
+                onCode: { code in Task { await join(payload: code) } }
             )
-            .frame(maxWidth: .infinity)
-            .aspectRatio(1.45, contentMode: .fit)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
+        case .manual:
+            ManualJoinView(
+                code: $manualCode,
+                joining: joining,
+                error: error,
+                canSubmit: canSubmit,
+                onPaste: pasteCode,
+                onSubmit: { Task { await join(payload: manualCode) } }
+            )
         }
-    }
-
-    private var manualEntry: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("手动输入", systemImage: "keyboard")
-                    .font(.headline)
-
-                Spacer()
-
-                Button("粘贴", systemImage: "doc.on.clipboard") {
-                    pasteCode()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(joining)
-            }
-
-            TextField("连接码或邀请链接", text: $manualCode)
-                .font(.body.monospaced())
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .focused($codeFieldFocused)
-                .submitLabel(.go)
-                .onSubmit { Task { await join(payload: manualCode) } }
-                .padding(.horizontal, 14)
-                .frame(minHeight: 52)
-                .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color(.separator).opacity(0.35), lineWidth: 0.5)
-                }
-                .disabled(joining)
-
-            if let error {
-                Label(error, systemImage: "exclamationmark.circle.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-
-            Button {
-                Task { await join(payload: manualCode) }
-            } label: {
-                if joining {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                } else {
-                    Label("连接", systemImage: "link")
-                        .frame(maxWidth: .infinity)
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!canSubmit || joining)
-        }
-        .padding(16)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24))
-        .animation(.snappy, value: error)
     }
 
     private var canSubmit: Bool {
@@ -212,7 +146,11 @@ struct JoinView: View {
         }
         manualCode = text.trimmingCharacters(in: .whitespacesAndNewlines)
         error = nil
-        codeFieldFocused = true
+    }
+
+    private func present(_ destination: Destination) {
+        error = nil
+        self.destination = destination
     }
 
     /// Accepts a connect code (official server implicit) or a full
@@ -263,6 +201,169 @@ struct JoinView: View {
     }
 }
 
+private struct ScannerJoinView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let joining: Bool
+    let error: String?
+    let scannerControl: ScannerControl
+    let onCode: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if DataScannerViewController.isSupported {
+                    ZStack {
+                        CodeScanner(control: scannerControl) { code in
+                            guard !joining else { return }
+                            onCode(code)
+                        }
+
+                        LinearGradient(
+                            colors: [.black.opacity(0.3), .clear, .black.opacity(0.42)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .allowsHitTesting(false)
+
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(
+                                .white.opacity(0.92),
+                                style: StrokeStyle(lineWidth: 2, dash: [10, 7])
+                            )
+                            .frame(maxWidth: 300)
+                            .aspectRatio(4.6, contentMode: .fit)
+                            .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+                            .allowsHitTesting(false)
+
+                        VStack(spacing: 12) {
+                            Spacer()
+
+                            if let error {
+                                Label(error, systemImage: "exclamationmark.circle.fill")
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
+
+                            Label("将 Mac 上的连接码放入框内", systemImage: "viewfinder")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .padding()
+                        .allowsHitTesting(false)
+
+                        if joining {
+                            Rectangle()
+                                .fill(.regularMaterial)
+                            ProgressView("正在连接…")
+                                .font(.headline)
+                        }
+                    }
+                    .accessibilityLabel("连接码扫描器")
+                    .animation(.snappy, value: error)
+                } else {
+                    ContentUnavailableView(
+                        "无法使用相机扫描",
+                        systemImage: "camera.fill",
+                        description: Text("请返回并选择手动输入")
+                    )
+                }
+            }
+            .background(Color(.systemBackground).ignoresSafeArea())
+            .navigationTitle("扫描连接码")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭", systemImage: "xmark") { dismiss() }
+                }
+            }
+        }
+        .interactiveDismissDisabled(joining)
+    }
+}
+
+private struct ManualJoinView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var code: String
+    @FocusState private var codeFieldFocused: Bool
+
+    let joining: Bool
+    let error: String?
+    let canSubmit: Bool
+    let onPaste: () -> Void
+    let onSubmit: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("连接码或邀请链接", text: $code)
+                        .font(.body.monospaced())
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .focused($codeFieldFocused)
+                        .submitLabel(.go)
+                        .onSubmit(onSubmit)
+                        .disabled(joining)
+
+                    Button("从剪贴板粘贴", systemImage: "doc.on.clipboard") {
+                        onPaste()
+                        codeFieldFocused = true
+                    }
+                    .disabled(joining)
+                } header: {
+                    Text("连接码")
+                } footer: {
+                    Text("连接码由 Mac 上的 Sitrep 生成，仅用于将这台设备加入你的空间。")
+                }
+
+                if let error {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.circle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("手动输入")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                Button(action: onSubmit) {
+                    if joining {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Label("连接", systemImage: "link")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .buttonBorderShape(.roundedRectangle(radius: 18))
+                .disabled(!canSubmit || joining)
+                .padding()
+                .background(.bar)
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭", systemImage: "xmark") { dismiss() }
+                }
+            }
+        }
+        .interactiveDismissDisabled(joining)
+        .onAppear { codeFieldFocused = true }
+        .animation(.snappy, value: error)
+    }
+}
+
 /// Live text scanner filtered to the connect-code pattern — random text in
 /// the camera view never triggers a join attempt.
 struct CodeScanner: UIViewControllerRepresentable {
@@ -286,6 +387,10 @@ struct CodeScanner: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ vc: DataScannerViewController, context: Context) {}
+
+    static func dismantleUIViewController(_ vc: DataScannerViewController, coordinator: Coordinator) {
+        vc.stopScanning()
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(onCode: onCode) }
 
