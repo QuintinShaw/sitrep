@@ -1,0 +1,13 @@
+{
+  "type": "task.event",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X1A3",
+  "ts": 1752480013000,
+  "body": {
+    "device_id": "mac-quintin-01",
+    "device_seq": 59,
+    "task_id": "run-2f9b",
+    "kind": "failed",
+    "occurred_at": 1752480012900,
+    "message": "Upload failed: network unreachable"
+  }
+}

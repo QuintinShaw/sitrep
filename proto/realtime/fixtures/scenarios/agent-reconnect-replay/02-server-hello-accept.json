@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "id": "arr-env-02",
+  "ts": 1752481000010,
+  "body": {
+    "stage": "accept",
+    "protocol_version": 1,
+    "session_id": "sess-arr-1",
+    "heartbeat_interval_ms": 20000
+  }
+}

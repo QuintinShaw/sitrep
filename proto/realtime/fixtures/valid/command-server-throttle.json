@@ -1,0 +1,11 @@
+{
+  "type": "command",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X1E1",
+  "ts": 1752480060000,
+  "body": {
+    "command_id": "cmd-throttle-9c1",
+    "origin": "server",
+    "action": "throttle",
+    "ttl_ms": 3600000
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "type": "ack",
+  "id": "dds-env-04",
+  "ts": 1752485003040,
+  "body": {
+    "acked": [{ "device_id": "mac-quintin-01", "device_seq": 20 }]
+  }
+}

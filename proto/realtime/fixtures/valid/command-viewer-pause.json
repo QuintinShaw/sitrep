@@ -1,0 +1,14 @@
+{
+  "type": "command",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X1E0",
+  "ts": 1752480020000,
+  "body": {
+    "command_id": "cmd-8f2c1a",
+    "origin": "viewer",
+    "issued_by_device_id": "iphone-quintin-01",
+    "action": "pause",
+    "target_device_id": "mac-quintin-01",
+    "ttl_ms": 30000,
+    "params": {}
+  }
+}

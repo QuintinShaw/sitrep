@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "id": "crd-env-02",
+  "ts": 1752482000010,
+  "body": {
+    "stage": "accept",
+    "protocol_version": 1,
+    "session_id": "sess-crd-1",
+    "heartbeat_interval_ms": 20000
+  }
+}

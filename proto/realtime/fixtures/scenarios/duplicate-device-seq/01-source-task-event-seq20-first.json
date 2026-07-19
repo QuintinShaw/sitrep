@@ -1,0 +1,13 @@
+{
+  "type": "task.event",
+  "id": "dds-env-01",
+  "ts": 1752485000000,
+  "body": {
+    "device_id": "mac-quintin-01",
+    "device_seq": 20,
+    "task_id": "run-9b31",
+    "kind": "done",
+    "occurred_at": 1752484999900,
+    "message": "Export finished"
+  }
+}

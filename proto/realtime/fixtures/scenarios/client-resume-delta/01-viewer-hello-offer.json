@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "id": "crd-env-01",
+  "ts": 1752482000000,
+  "body": {
+    "stage": "offer",
+    "device_id": "iphone-quintin-01",
+    "role": "viewer",
+    "protocol_versions": [1]
+  }
+}

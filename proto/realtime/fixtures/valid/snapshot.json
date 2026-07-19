@@ -1,0 +1,37 @@
+{
+  "type": "snapshot",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X0Y3",
+  "ts": 1752480010200,
+  "body": {
+    "revision": 128,
+    "tasks": [
+      {
+        "task_id": "run-2f9a",
+        "device_id": "mac-quintin-01",
+        "title": "Nightly backup",
+        "state": "running",
+        "percent": 42,
+        "step": "uploading archives",
+        "updated_at": 1752480005000,
+        "display": { "icon": "arrow.up.circle", "tint": "blue", "template": "progress" }
+      }
+    ],
+    "metrics": [
+      {
+        "metric_id": "cpu.load",
+        "value": "0.62",
+        "label": "CPU load",
+        "ts": 1752480009800
+      }
+    ],
+    "messages": [
+      {
+        "message_id": "mac-quintin-01:41",
+        "device_id": "mac-quintin-01",
+        "level": "info",
+        "text": "Backup completed for volume Data",
+        "occurred_at": 1752479990000
+      }
+    ]
+  }
+}

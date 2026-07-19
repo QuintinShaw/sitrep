@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "id": "crg-env-02",
+  "ts": 1752483000010,
+  "body": {
+    "stage": "accept",
+    "protocol_version": 1,
+    "session_id": "sess-crg-1",
+    "heartbeat_interval_ms": 20000
+  }
+}

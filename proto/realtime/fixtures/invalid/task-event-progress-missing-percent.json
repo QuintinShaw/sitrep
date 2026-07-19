@@ -1,0 +1,13 @@
+{
+  "type": "task.event",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X3E0",
+  "ts": 1752480004100,
+  "body": {
+    "device_id": "mac-quintin-01",
+    "device_seq": 55,
+    "task_id": "run-2f9a",
+    "kind": "progress",
+    "occurred_at": 1752480004000,
+    "step": "uploading archives"
+  }
+}

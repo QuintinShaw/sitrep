@@ -1,0 +1,13 @@
+{
+  "type": "message.event",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X2B0",
+  "ts": 1752480006100,
+  "body": {
+    "device_id": "mac-quintin-01",
+    "device_seq": 56,
+    "message_id": "mac-quintin-01:56",
+    "level": "info",
+    "text": "Archive 3 of 5 uploaded",
+    "occurred_at": 1752480006
+  }
+}

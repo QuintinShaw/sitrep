@@ -1,0 +1,34 @@
+{
+  "type": "delta",
+  "id": "crd-env-04",
+  "ts": 1752482000030,
+  "body": {
+    "from_revision": 126,
+    "to_revision": 128,
+    "events": [
+      {
+        "event_type": "task.event",
+        "event": {
+          "device_id": "mac-quintin-01",
+          "device_seq": 55,
+          "task_id": "run-2f9a",
+          "kind": "progress",
+          "occurred_at": 1752481999000,
+          "percent": 40,
+          "step": "uploading archives"
+        }
+      },
+      {
+        "event_type": "message.event",
+        "event": {
+          "device_id": "mac-quintin-01",
+          "device_seq": 56,
+          "message_id": "mac-quintin-01:56",
+          "level": "info",
+          "text": "Archive 3 of 5 uploaded",
+          "occurred_at": 1752482000000
+        }
+      }
+    ]
+  }
+}

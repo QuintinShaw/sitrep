@@ -1,0 +1,12 @@
+{
+  "type": "hello",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X0Y1",
+  "ts": 1752480000050,
+  "body": {
+    "stage": "accept",
+    "protocol_version": 1,
+    "session_id": "sess_7e1a9c",
+    "capabilities": [],
+    "heartbeat_interval_ms": 20000
+  }
+}

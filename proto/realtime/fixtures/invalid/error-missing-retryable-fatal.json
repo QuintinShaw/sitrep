@@ -1,0 +1,9 @@
+{
+  "type": "error",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X3C0",
+  "ts": 1752480070000,
+  "body": {
+    "code": "rate_limited",
+    "message": "metric.frame rate exceeded 10/s on this connection"
+  }
+}

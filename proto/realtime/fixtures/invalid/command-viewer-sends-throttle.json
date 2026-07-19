@@ -1,0 +1,12 @@
+{
+  "type": "command",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X2D0",
+  "ts": 1752480020000,
+  "body": {
+    "command_id": "cmd-should-not-work",
+    "origin": "viewer",
+    "issued_by_device_id": "iphone-quintin-01",
+    "action": "throttle",
+    "ttl_ms": 30000
+  }
+}

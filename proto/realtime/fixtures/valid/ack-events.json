@@ -1,0 +1,11 @@
+{
+  "type": "ack",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X0Y5",
+  "ts": 1752480010500,
+  "body": {
+    "acked": [
+      { "device_id": "mac-quintin-01", "device_seq": 55 },
+      { "device_id": "mac-quintin-01", "device_seq": 56 }
+    ]
+  }
+}

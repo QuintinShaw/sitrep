@@ -1,0 +1,29 @@
+{
+  "type": "snapshot",
+  "id": "crg-env-04",
+  "ts": 1752483000030,
+  "body": {
+    "revision": 150,
+    "tasks": [
+      {
+        "task_id": "run-2f9a",
+        "device_id": "mac-quintin-01",
+        "title": "Nightly backup",
+        "state": "done",
+        "updated_at": 1752482990000
+      }
+    ],
+    "metrics": [
+      { "metric_id": "cpu.load", "value": "0.18", "ts": 1752483000000 }
+    ],
+    "messages": [
+      {
+        "message_id": "mac-quintin-01:120",
+        "device_id": "mac-quintin-01",
+        "level": "info",
+        "text": "Backup completed for volume Data",
+        "occurred_at": 1752482990000
+      }
+    ]
+  }
+}

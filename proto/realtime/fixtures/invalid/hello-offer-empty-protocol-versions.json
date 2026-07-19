@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X2E0",
+  "ts": 1752480000000,
+  "body": {
+    "stage": "offer",
+    "device_id": "mac-quintin-01",
+    "role": "source",
+    "protocol_versions": []
+  }
+}
