@@ -1,0 +1,13 @@
+{
+  "name": "sitrep-realtime-protocol-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-contained JSON Schema conformance checker for proto/realtime. Not published; not depended on by server/, daemon/, or apple/.",
+  "type": "module",
+  "scripts": {
+    "validate": "node validate.js"
+  },
+  "dependencies": {
+    "ajv": "8.20.0"
+  }
+}
