@@ -28,6 +28,7 @@ import {
   ERROR_SEMANTICS,
   HEARTBEAT_INTERVAL_MS,
   LEASE_DEFAULT_MS,
+  METRIC_CACHE_MAX_METRICS,
   METRIC_FRAME_RATE_PER_SEC,
   EVENT_LOG_RETENTION_REVISIONS,
   MESSAGE_WINDOW,
@@ -86,12 +87,32 @@ function canonicalJson(value: unknown): string {
 }
 
 export class SpaceHub extends DurableObject<Env> {
+  /** Current schema version this build expects. Bump when `migrate()`'s
+   * DDL block changes, alongside adding whatever new `CREATE TABLE/INDEX
+   * IF NOT EXISTS` statements the change needs. */
+  private static readonly SCHEMA_VERSION = 1;
+
   /** Best-effort metric cache (SPEC.md section 6.2: snapshot.metrics is a
    * convenience cache, allowed to be empty/stale, outside space_revision
-   * accounting) — deliberately in-memory only, never written to SQLite. */
+   * accounting) — deliberately in-memory only, never written to SQLite.
+   * Capped at METRIC_CACHE_MAX_METRICS distinct metric_ids with
+   * least-recently-updated eviction (see touchMetricCache) so a source
+   * rotating metric_ids without bound can't grow this without bound. Map
+   * iteration order is insertion order and JS re-inserts a key at the end
+   * on delete+set, which is exactly what touchMetricCache relies on to
+   * track recency. */
   private metricsCache = new Map<string, MetricSample>();
   private rateLimiters = new WeakMap<WebSocket, RateLimiterState>();
   private hotPathCounter = 0;
+
+  /** Set true only when migrate() actually executed the DDL block during
+   * this construct, as opposed to finding the store already at
+   * SCHEMA_VERSION and returning without touching SQLite. Exists purely
+   * so tests can assert the 10+ `CREATE TABLE/INDEX IF NOT EXISTS`
+   * statements do NOT re-run on every hibernation wake (DO constructors
+   * re-run on wake; see the constructor's migrate() call and the
+   * space-hub.ts cost notes) — never read by production logic. */
+  private ranMigrationDdl = false;
 
   /** Injectable for tests: decides whether the Nth hot-path event gets
    * logged. Default samples at <=1%. Errors always log regardless of this
@@ -117,8 +138,25 @@ export class SpaceHub extends DurableObject<Env> {
     this.migrate();
   }
 
+  /** Runs the schema DDL exactly once per store lifetime, not once per DO
+   * construct. DO constructors re-run on every hibernation wake (that's
+   * the whole point of hibernation — the JS instance is cheap to recreate,
+   * the SQLite store is what's durable), so unconditionally re-issuing
+   * 10+ `CREATE TABLE/INDEX IF NOT EXISTS` statements here would mean
+   * every wake pays for a full schema scan, defeating the sparse-
+   * connection cost goals documented in realtime-server.md. Instead: one
+   * lightweight version read, and the DDL block (plus the version write)
+   * only runs when the store is behind — including the fresh-DO case,
+   * where the version table itself doesn't exist yet. */
   private migrate(): void {
+    if (this.schemaVersion() >= SpaceHub.SCHEMA_VERSION) return;
+
+    this.ranMigrationDdl = true;
     this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS _schema_migrations (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS space_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -193,6 +231,29 @@ export class SpaceHub extends DurableObject<Env> {
         delivered INTEGER NOT NULL DEFAULT 0
       );
     `);
+    // Same synchronous, no-`await`-in-between transaction as the DDL above
+    // (see the class-level concurrency note) — the version write is
+    // atomic with the schema it describes.
+    this.ctx.storage.sql.exec(
+      `INSERT INTO _schema_migrations (id, version) VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET version = excluded.version`,
+      SpaceHub.SCHEMA_VERSION,
+    );
+  }
+
+  /** One lightweight SELECT: current schema version, or 0 for a fresh DO
+   * (the `_schema_migrations` table itself doesn't exist yet, which throws
+   * rather than returning zero rows — SQLite has no "does this table
+   * exist" query result short of inspecting sqlite_master, and a bare
+   * SELECT-that-may-throw is cheaper and simpler than checking
+   * sqlite_master first on every call). */
+  private schemaVersion(): number {
+    try {
+      const row = this.ctx.storage.sql.exec<{ version: number }>("SELECT version FROM _schema_migrations WHERE id = 1").toArray()[0];
+      return row?.version ?? 0;
+    } catch {
+      return 0;
+    }
   }
 
   // ---- WebSocket entry point ----
@@ -463,20 +524,23 @@ export class SpaceHub extends DurableObject<Env> {
       if (other === ws) continue;
       const otherAtt = other.deserializeAttachment();
       if (isConnAttachment(otherAtt) && otherAtt.helloDone) {
-        this.send(other, "error", {
-          code: "superseded",
-          message: "device completed hello on a newer connection",
-          ...ERROR_SEMANTICS.superseded,
-        });
         // Product invariant 5: superseded must never be silent — it is a
         // security-relevant event (possible credential/session reuse), so it
-        // always logs at 100% via logAlways, independent of the wire reply
-        // above (which must stay byte-identical for the superseded peer).
+        // always logs at 100% via logAlways. Logged BEFORE the wire reply
+        // below: if `this.send(other, ...)` were to throw (e.g. a socket
+        // that's already gone), the security log must still have fired —
+        // it must never depend on the send succeeding. The reply itself
+        // stays byte-identical for the superseded peer in the success path.
         this.logAlways("superseded", {
           device_id: att.deviceId,
           role: att.role,
           superseded_session_id: otherAtt.sessionId,
           superseding_session_id: newSessionId,
+        });
+        this.send(other, "error", {
+          code: "superseded",
+          message: "device completed hello on a newer connection",
+          ...ERROR_SEMANTICS.superseded,
         });
         other.close(1008, "superseded");
       }
@@ -793,13 +857,28 @@ export class SpaceHub extends DurableObject<Env> {
       // is acceptable (the whole cache is best-effort, section 6.2).
       const cached = this.metricsCache.get(sample.metric_id);
       if (cached && sample.ts <= cached.ts) continue;
-      this.metricsCache.set(sample.metric_id, sample);
+      this.touchMetricCache(sample.metric_id, sample);
       accepted.push(sample);
     }
     if (accepted.length > 0) this.broadcastMetricFrame({ device_id: body.device_id, metrics: accepted });
     // Deliberately no this.ctx.storage.sql.exec(...) anywhere in this
     // method and no revision change — see the class-level cost notes and
     // docs/design/realtime-server.md.
+  }
+
+  /** Upserts one metric_id into metricsCache, enforcing
+   * METRIC_CACHE_MAX_METRICS with least-recently-updated eviction. Always
+   * deletes before re-setting (even for an existing key) so the entry
+   * moves to the end of Map iteration order — that's what makes "the
+   * first key in iteration order" equivalent to "the least recently
+   * updated key" below. */
+  private touchMetricCache(metricId: string, sample: MetricSample): void {
+    this.metricsCache.delete(metricId);
+    if (this.metricsCache.size >= METRIC_CACHE_MAX_METRICS) {
+      const oldest = this.metricsCache.keys().next().value;
+      if (oldest !== undefined) this.metricsCache.delete(oldest);
+    }
+    this.metricsCache.set(metricId, sample);
   }
 
   private broadcastMetricFrame(body: MetricFrameBody): void {

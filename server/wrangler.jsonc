@@ -4,12 +4,31 @@
   "main": "src/adapters/workers.ts",
   "compatibility_date": "2026-07-18",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  // Observability (Fix B, pre-merge review): "enabled": true alone only
+  // turns telemetry on — it does not bound invocation-log volume, so the
+  // documented cost model (docs/design/realtime-server.md) wasn't real.
+  // logAlways() security events (e.g. "superseded") must never be
+  // head-sampled away, so `logs.head_sampling_rate` stays at 1.0 (its
+  // default) and the ≤1% in-code `logSampler` in SpaceHub is what actually
+  // bounds hot-path console.log volume. `invocation_logs: false` is what
+  // bounds the OTHER, uncappable log source — the platform's automatic
+  // per-request invocation log, emitted once per webSocketMessage
+  // regardless of what the handler logs. Traces are diagnostic-only (no
+  // logAlways equivalent), so they're head-sampled at 1%.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": false },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  },
   "routes": [{ "pattern": "sitrep.quintinshaw.com", "custom_domain": true }],
   "kv_namespaces": [{ "binding": "INVITE_DIR", "id": "490111734d5246cc949f0eec1c0ca0f3" }],
   "vars": {
     "APNS_BUNDLE_ID": "dev.sitrep.app",
-    "APNS_HOST": "api.sandbox.push.apple.com"
+    "APNS_HOST": "api.sandbox.push.apple.com",
+    // Server-side kill switch for /v3/realtime auto-connect (Fix A, pre-merge
+    // review). Absent/false means disabled; flip to true per-environment to
+    // enable. No per-space granularity in v1.
+    "REALTIME_ENABLED": false
   },
   "durable_objects": {
     "bindings": [
