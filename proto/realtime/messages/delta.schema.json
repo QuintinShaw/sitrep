@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/delta.schema.json",
+  "title": "delta",
+  "description": "Incremental set of reliable events applied to a space between two revisions. Sent unicast to a single requesting viewer in reply to `resume`, only when the server can serve the full range from its retained event history; otherwise the server MUST send `snapshot` instead. `to_revision` MUST equal `from_revision` plus the number of events in `events` (each reliable event advances the revision by exactly 1).",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "delta" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from_revision", "to_revision", "events"],
+          "properties": {
+            "from_revision": { "$ref": "../common.schema.json#/$defs/space_revision" },
+            "to_revision": { "$ref": "../common.schema.json#/$defs/space_revision" },
+            "events": {
+              "type": "array",
+              "description": "Ordered oldest-first. Each item is the body of one task.event or message.event, tagged with its own `event_type` so the receiver can apply it exactly as it would the corresponding live envelope.",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["event_type", "event"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "event_type": { "const": "task.event" },
+                      "event": { "$ref": "task.event.schema.json#/$defs/body" }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": ["event_type", "event"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "event_type": { "const": "message.event" },
+                      "event": { "$ref": "message.event.schema.json#/$defs/body" }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/ack.schema.json",
+  "title": "ack",
+  "description": "Generic acknowledgment envelope, used for two distinct purposes that MAY be combined in one ack: (1) confirming receipt of one or more reliable events, identified by (device_id, device_seq) pairs, so the sender can prune its resend queue; (2) confirming a single control-plane request (hello is never acked this way; subscribe/interest.renew/command are), identified by echoing that request's envelope id in `in_reply_to`, optionally carrying a renewed interest lease. At least one of `acked` or `in_reply_to` MUST be present.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "ack" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "anyOf": [
+            { "required": ["acked"] },
+            { "required": ["in_reply_to"] }
+          ],
+          "properties": {
+            "acked": {
+              "type": "array",
+              "description": "Reliable events being confirmed as durably applied. Safe to acknowledge the same (device_id, device_seq) more than once (idempotent).",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["device_id", "device_seq"],
+                "properties": {
+                  "device_id": { "$ref": "../common.schema.json#/$defs/device_id" },
+                  "device_seq": { "$ref": "../common.schema.json#/$defs/device_seq" }
+                }
+              },
+              "minItems": 1
+            },
+            "in_reply_to": {
+              "$ref": "../common.schema.json#/$defs/envelope_id",
+              "description": "The `id` of the subscribe/unsubscribe/interest.renew/command envelope this ack confirms."
+            },
+            "lease": {
+              "type": "object",
+              "description": "Present when acking a subscribe or interest.renew: the interest lease the server just granted or extended.",
+              "additionalProperties": false,
+              "required": ["expires_at"],
+              "properties": {
+                "expires_at": {
+                  "$ref": "../common.schema.json#/$defs/unix_ms_timestamp",
+                  "description": "Absolute deadline by which the viewer must send interest.renew to keep the lease alive. Always between 30000 and 60000 ms after this ack's envelope.ts."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

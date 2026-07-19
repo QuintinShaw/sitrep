@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/snapshot.schema.json",
+  "title": "snapshot",
+  "description": "Full current state of a space at a given revision. Sent unicast to a single requesting viewer, in reply to `resume` or the initial `subscribe`. Never persisted itself and never increments space_revision (it reports a revision that was already reached by prior reliable events).",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "snapshot" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["revision", "tasks", "metrics", "messages"],
+          "properties": {
+            "revision": { "$ref": "../common.schema.json#/$defs/space_revision" },
+            "tasks": {
+              "type": "array",
+              "items": { "$ref": "../common.schema.json#/$defs/task_state" }
+            },
+            "metrics": {
+              "type": "array",
+              "items": { "$ref": "../common.schema.json#/$defs/metric_sample" }
+            },
+            "messages": {
+              "type": "array",
+              "description": "Recent messages only. The server MAY truncate this to a bounded window (implementations SHOULD document their own cap, e.g. the most recent 200); a snapshot is not a durability guarantee for message history.",
+              "items": { "$ref": "../common.schema.json#/$defs/message_record" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

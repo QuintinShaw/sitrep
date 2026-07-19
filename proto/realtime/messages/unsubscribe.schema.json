@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/unsubscribe.schema.json",
+  "title": "unsubscribe",
+  "description": "Sent by a viewer to voluntarily end its interest lease before expiry. The server MUST release the lease immediately on receipt (it MUST NOT wait for expires_at). If this removes the space's last active lease, the server MUST notify every connected source device with a `command{origin: server, action: throttle}` (see SPEC.md 'Interest lease').",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "unsubscribe" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        }
+      }
+    }
+  ]
+}

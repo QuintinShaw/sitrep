@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/message.event.schema.json",
+  "title": "message.event",
+  "description": "Reliable event reporting a single point-in-time message. Sent by a source device. Persisted, increments space_revision by 1, and is broadcast to every viewer subscribed to the space; MAY also trigger a push notification. Shares the same device_seq counter as task.event (see common.schema.json#/$defs/device_seq) and uses the same (device_id, device_seq) deduplication and resend rules.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "message.event" },
+        "body": { "$ref": "#/$defs/body" }
+      }
+    }
+  ],
+  "$defs": {
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "device_seq", "message_id", "level", "text", "occurred_at"],
+      "properties": {
+        "device_id": { "$ref": "../common.schema.json#/$defs/device_id" },
+        "device_seq": { "$ref": "../common.schema.json#/$defs/device_seq" },
+        "message_id": {
+          "type": "string",
+          "description": "Unique id for this message. SHOULD be deterministically derivable from (device_id, device_seq) but MUST be sent explicitly rather than re-derived by the receiver, so the wire format stays self-contained.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "level": { "$ref": "../common.schema.json#/$defs/message_level" },
+        "text": { "type": "string", "maxLength": 1000 },
+        "occurred_at": { "$ref": "../common.schema.json#/$defs/unix_ms_timestamp" },
+        "automation_id": { "type": "string", "maxLength": 128 }
+      }
+    }
+  }
+}

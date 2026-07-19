@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/metric.frame.schema.json",
+  "title": "metric.frame",
+  "description": "Best-effort batch of metric samples from a source device. NOT persisted, NEVER acked, and MAY be dropped by the transport or the server under load; a lost frame is superseded by the next one and is never retransmitted. A sender MUST merge multiple pending updates to the same metric_id into a single sample (the latest one) before emitting a frame, and MUST NOT emit a frame containing a given metric_id more often than once per 500ms. A connection MUST NOT emit more than 10 metric.frame envelopes per second; the server MAY reject excess frames with error code rate_limited. A receiver MUST discard any sample whose ts is less than or equal to the last-applied ts it has already accepted for that metric_id (out-of-order/duplicate drop), independent of envelope arrival order.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "metric.frame" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["device_id", "metrics"],
+          "properties": {
+            "device_id": { "$ref": "../common.schema.json#/$defs/device_id" },
+            "metrics": {
+              "type": "array",
+              "items": { "$ref": "../common.schema.json#/$defs/metric_sample" },
+              "minItems": 1,
+              "maxItems": 64
+            }
+          }
+        }
+      }
+    }
+  ]
+}

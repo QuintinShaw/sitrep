@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/subscribe.schema.json",
+  "title": "subscribe",
+  "description": "Sent by a viewer to declare interest in a space, establishing an interest lease. The server MUST choose a lease duration between 30000 and 60000 ms inclusive and communicate the absolute deadline via `ack.body.lease.expires_at`. If this is the space's first active lease (transition from zero interested viewers to one or more), the server MUST notify every connected source device with a `command{origin: server, action: resume_rate}` (see SPEC.md 'Interest lease'). subscribe on a connection that already holds a lease replaces it (equivalent to unsubscribe immediately followed by subscribe with the new topics).",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "subscribe" },
+        "body": { "$ref": "#/$defs/body" }
+      }
+    }
+  ],
+  "$defs": {
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "topics": {
+          "type": "array",
+          "description": "Restricts which reliable/best-effort event kinds the server forwards under this lease. Omitted or empty means all topics.",
+          "items": { "type": "string", "enum": ["task", "metric", "message"] },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    }
+  }
+}

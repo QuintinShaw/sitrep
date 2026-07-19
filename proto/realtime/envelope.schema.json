@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/envelope.schema.json",
+  "title": "Sitrep realtime protocol - generic envelope",
+  "description": "Shape shared by every frame of the Sitrep realtime protocol. Every message type schema under messages/ composes this with `allOf` and narrows `type` to a single const and `body` to a type-specific shape. This generic form is used for a first-pass dispatch validation (see tools/validate.js) before the type-specific schema is applied. The literal text frames `ping` and `pong` (see SPEC.md `Transport and heartbeat`) are NOT envelopes and are not described by this schema.",
+  "type": "object",
+  "required": ["type", "id", "ts", "body"],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "type": "string",
+      "description": "Dotted message type name. Receivers MUST ignore an envelope whose type they do not recognize (forward compatibility with additive future types) rather than raising `malformed`.",
+      "enum": [
+        "hello",
+        "resume",
+        "snapshot",
+        "delta",
+        "ack",
+        "task.event",
+        "message.event",
+        "metric.frame",
+        "subscribe",
+        "unsubscribe",
+        "interest.renew",
+        "command",
+        "error"
+      ]
+    },
+    "id": { "$ref": "common.schema.json#/$defs/envelope_id" },
+    "ts": {
+      "$ref": "common.schema.json#/$defs/unix_ms_timestamp",
+      "description": "When the sender constructed/sent this envelope. Distinct from any domain timestamp (e.g. task.event.body.occurred_at) carried inside `body`."
+    },
+    "body": {
+      "type": "object",
+      "description": "Type-specific payload. Never carries authentication credentials of any kind (see SPEC.md `Authentication boundary`)."
+    }
+  }
+}

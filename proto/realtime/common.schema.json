@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/common.schema.json",
+  "title": "Sitrep realtime protocol - shared definitions",
+  "description": "Reusable $defs referenced by envelope.schema.json and every schema under messages/. Not sent on the wire by itself.",
+  "$defs": {
+    "unix_ms_timestamp": {
+      "type": "integer",
+      "description": "Unix epoch time in milliseconds. MUST NOT be epoch seconds. The minimum bound is 1_000_000_000_000 (2001-09-09T01:46:40Z in milliseconds); any legitimate Sitrep timestamp is larger than this, so a seconds-scale value (10 digits, < 1e10) is always rejected by this bound. This is a deliberate guard against the historical seconds/milliseconds confusion in this codebase.",
+      "minimum": 1000000000000,
+      "maximum": 9999999999999
+    },
+    "envelope_id": {
+      "type": "string",
+      "description": "Opaque unique identifier for one envelope, assigned by the sender. RECOMMENDED: UUIDv4 or ULID. Retransmissions of the same application-level event get a NEW envelope_id each time; reliable-event deduplication uses (device_id, device_seq) in the body, never this field.",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "device_id": {
+      "type": "string",
+      "description": "Stable identifier for one physical device/installation, assigned at pairing time and reused across reconnects. Opaque to the protocol.",
+      "pattern": "^[A-Za-z0-9_-]{1,128}$"
+    },
+    "device_role": {
+      "type": "string",
+      "description": "The realtime-protocol role of a connecting device. This is distinct from and coarser than the HTTP-layer roles (owner/admin/viewer/source) used for pairing and REST access: an 'owner' or 'admin' device that opens a realtime connection to observe state always connects with device_role 'viewer'. Only a device that executes and reports tasks/metrics/messages connects as 'source'.",
+      "enum": ["source", "viewer"]
+    },
+    "device_seq": {
+      "type": "integer",
+      "description": "Per-device monotonically increasing counter shared across ALL reliable event types (task.event and message.event) emitted by that device. The first reliable event a device ever sends in a space uses device_seq 1. A device MUST NOT reuse a device_seq value and MUST NOT emit device_seq values out of increasing order, but a gap (e.g. 5 then 7) is permitted and signals to the receiver that event 6 was lost and cannot be recovered.",
+      "minimum": 1
+    },
+    "space_revision": {
+      "type": "integer",
+      "description": "Monotonically increasing counter for one space. Starts at 0 (empty space). Incremented by exactly 1 each time the server durably applies one reliable event (task.event or message.event, including a message-carried config change) to the space. metric.frame and control-plane messages never change it.",
+      "minimum": 0
+    },
+    "protocol_version": {
+      "type": "integer",
+      "description": "A single protocol major version number understood by an implementation.",
+      "minimum": 1
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Identifier of one task run, stable for the lifetime of that run.",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "metric_id": {
+      "type": "string",
+      "description": "Identifier of one metric series. Matches the id grammar from proto/SPEC.md's metric.update verb.",
+      "pattern": "^[a-z0-9_.-]{1,64}$"
+    },
+    "message_level": {
+      "type": "string",
+      "enum": ["info", "warn", "error"]
+    },
+    "task_kind": {
+      "type": "string",
+      "description": "Lifecycle phase this task.event body reports. Named distinctly from the proto/SPEC.md stdout verbs (task.start/progress/step/done/fail) because this is a post-processed sync-layer event, not a raw process line.",
+      "enum": ["started", "progress", "step", "done", "failed"]
+    },
+    "display_hints": {
+      "type": "object",
+      "description": "Optional, purely cosmetic presentation hints carried alongside a task or metric. Renderers MUST ignore hint values they do not understand.",
+      "additionalProperties": false,
+      "properties": {
+        "icon": { "type": "string", "maxLength": 64 },
+        "tint": { "type": "string", "maxLength": 32 },
+        "template": { "type": "string", "maxLength": 32 }
+      }
+    },
+    "task_state": {
+      "type": "object",
+      "description": "Full current state of one task, as carried in a snapshot.",
+      "additionalProperties": false,
+      "required": ["task_id", "device_id", "state", "updated_at"],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/task_id" },
+        "device_id": { "$ref": "#/$defs/device_id" },
+        "title": { "type": "string", "maxLength": 200 },
+        "state": { "type": "string", "enum": ["running", "done", "failed"] },
+        "percent": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "step": { "type": "string", "maxLength": 500 },
+        "message": { "type": "string", "maxLength": 500 },
+        "updated_at": { "$ref": "#/$defs/unix_ms_timestamp" },
+        "display": { "$ref": "#/$defs/display_hints" }
+      }
+    },
+    "metric_sample": {
+      "type": "object",
+      "description": "Latest known sample of one metric, as carried in a snapshot or a metric.frame.",
+      "additionalProperties": false,
+      "required": ["metric_id", "value", "ts"],
+      "properties": {
+        "metric_id": { "$ref": "#/$defs/metric_id" },
+        "value": { "type": "string", "maxLength": 256 },
+        "label": { "type": "string", "maxLength": 100 },
+        "ts": { "$ref": "#/$defs/unix_ms_timestamp" },
+        "display": { "$ref": "#/$defs/display_hints" }
+      }
+    },
+    "message_record": {
+      "type": "object",
+      "description": "Full content of one message, as carried in a snapshot.",
+      "additionalProperties": false,
+      "required": ["message_id", "device_id", "level", "text", "occurred_at"],
+      "properties": {
+        "message_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "device_id": { "$ref": "#/$defs/device_id" },
+        "level": { "$ref": "#/$defs/message_level" },
+        "text": { "type": "string", "maxLength": 1000 },
+        "occurred_at": { "$ref": "#/$defs/unix_ms_timestamp" }
+      }
+    },
+    "reliability": {
+      "type": "object",
+      "description": "Fields shared by every reliable event body (task.event, message.event). Composed with allOf by those schemas rather than duplicated.",
+      "required": ["device_id", "device_seq"],
+      "properties": {
+        "device_id": { "$ref": "#/$defs/device_id" },
+        "device_seq": { "$ref": "#/$defs/device_seq" }
+      }
+    }
+  }
+}

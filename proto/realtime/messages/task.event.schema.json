@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/task.event.schema.json",
+  "title": "task.event",
+  "description": "Reliable event reporting a task lifecycle transition or progress update. Sent by a source device. Persisted, increments space_revision by 1, and is broadcast to every viewer subscribed to the space (see SPEC.md cost table). Deduplicated by the server on (device_id, device_seq); the sender keeps retransmitting an unacked task.event (with its original device_seq, in a fresh envelope with a new envelope id) until it receives an `ack` that covers that device_seq.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "task.event" },
+        "body": { "$ref": "#/$defs/body" }
+      }
+    }
+  ],
+  "$defs": {
+    "body": {
+      "type": "object",
+      "allOf": [{ "$ref": "../common.schema.json#/$defs/reliability" }],
+      "additionalProperties": false,
+      "required": ["device_id", "device_seq", "task_id", "kind", "occurred_at"],
+      "properties": {
+        "device_id": { "$ref": "../common.schema.json#/$defs/device_id" },
+        "device_seq": { "$ref": "../common.schema.json#/$defs/device_seq" },
+        "task_id": { "$ref": "../common.schema.json#/$defs/task_id" },
+        "kind": { "$ref": "../common.schema.json#/$defs/task_kind" },
+        "occurred_at": {
+          "$ref": "../common.schema.json#/$defs/unix_ms_timestamp",
+          "description": "When this transition actually happened on the source device, independent of envelope.ts (send time)."
+        },
+        "title": { "type": "string", "maxLength": 200 },
+        "percent": {
+          "type": "integer",
+          "description": "Present when kind is 'progress'.",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "step": { "type": "string", "maxLength": 500 },
+        "message": {
+          "type": "string",
+          "description": "Present when kind is 'done' or 'failed'.",
+          "maxLength": 500
+        },
+        "display": { "$ref": "../common.schema.json#/$defs/display_hints" }
+      },
+      "if": { "properties": { "kind": { "const": "progress" } } },
+      "then": { "required": ["percent"] }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/resume.schema.json",
+  "title": "resume",
+  "description": "Sent by a viewer device after `hello` completes (on a fresh connection or a reconnect) to ask the server to bring it up to date. The server responds with exactly one `delta` (if it can replay from last_revision) or exactly one `snapshot` (if the gap is too large, history is unavailable, or last_revision is 0). See SPEC.md 'Client resume flow'. A source device does not send resume for its own outbound queue: it simply re-sends any unacked task.event/message.event it holds (see SPEC.md 'Agent reconnect replay flow').",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "resume" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["last_revision"],
+          "properties": {
+            "last_revision": {
+              "$ref": "../common.schema.json#/$defs/space_revision",
+              "description": "The space_revision this viewer last fully applied. 0 means the viewer holds no prior state and always yields a snapshot."
+            }
+          }
+        }
+      }
+    }
+  ]
+}
