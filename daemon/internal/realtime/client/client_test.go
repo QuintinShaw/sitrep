@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -599,4 +600,149 @@ func TestClientThrottlePreservedAcrossReconnect(t *testing.T) {
 		t.Fatalf("SendCommand(resume_rate): %v", err)
 	}
 	waitFor(t, 3*time.Second, func() bool { return !c.MetricsThrottled() })
+}
+
+// TestClientConcurrentSendsPreserveDeviceSeqOrderDuringReplay is a
+// regression test for the reconnect race in SPEC.md section 5.1:
+// device_seq values MUST appear on the wire in strictly increasing order.
+// Before this was fixed, a live SendTaskEvent's write ran directly on the
+// caller's own goroutine (trySendNow) with nothing ordering it against
+// replayPending's writes on a freshly reconnected connection, so a
+// freshly-enqueued higher device_seq could reach the wire before an older,
+// still-unacked device_seq was resent.
+//
+// This test drives that race directly rather than merely asserting on the
+// fix's internals: connection 1 accepts exactly one task.event and then
+// drops without acking it (forcing a reconnect with a non-empty replay
+// backlog), while many goroutines concurrently call SendTaskEvent — some
+// landing before the drop, some during the reconnect/replay window on
+// connection 2, and some once connection 2 is already steady-state. The
+// mock server records every device_seq it observes, across both
+// connections, in arrival order. The assertion is on first-occurrence
+// order (a seq may legitimately repeat on the wire, e.g. a full-backlog
+// resend re-covering an already-sent-but-still-unacked item; only the
+// *first* time each seq is ever seen must be strictly increasing).
+//
+// Run with `go test -race`: the fix serializes all reliable-event writes
+// for a connection through a single goroutine (connectAndServe's select
+// loop, woken by wakeSender), which this test also exercises for data
+// races on the client's own state under concurrent callers.
+func TestClientConcurrentSendsPreserveDeviceSeqOrderDuringReplay(t *testing.T) {
+	const concurrent = 40
+
+	var mu sync.Mutex
+	var arrival []int64
+
+	var connNum int32
+	srv := rttest.New(func(conn *rttest.Conn) {
+		n := atomic.AddInt32(&connNum, 1)
+		if _, err := conn.HelloAccept("sess", 1000); err != nil {
+			t.Errorf("HelloAccept: %v", err)
+			return
+		}
+		if n == 1 {
+			// Read exactly one task.event, record it, then drop the
+			// connection without acking — the client must reconnect with
+			// that event (and possibly more enqueued concurrently) still
+			// unacked in its outbox.
+			for {
+				env, err := conn.ReadEnvelope()
+				if err == rttest.ErrPing {
+					_ = conn.WritePong()
+					continue
+				}
+				if err != nil {
+					return
+				}
+				if env.Type != wire.TypeTaskEvent {
+					continue
+				}
+				body, derr := wire.DecodeBody(env)
+				if derr != nil {
+					t.Errorf("decode task.event on connection 1: %v", derr)
+					return
+				}
+				tb := body.(wire.TaskEventBody)
+				mu.Lock()
+				arrival = append(arrival, tb.DeviceSeq)
+				mu.Unlock()
+				conn.Close("simulated drop")
+				return
+			}
+		}
+		// Every later connection: replay the backlog and everything sent
+		// afterward lands here. Ack each event as it arrives so the
+		// outbox eventually drains.
+		for {
+			env, err := conn.ReadEnvelope()
+			if err == rttest.ErrPing {
+				_ = conn.WritePong()
+				continue
+			}
+			if err != nil {
+				return
+			}
+			if env.Type != wire.TypeTaskEvent {
+				continue
+			}
+			body, derr := wire.DecodeBody(env)
+			if derr != nil {
+				t.Errorf("decode task.event on connection %d: %v", n, derr)
+				continue
+			}
+			tb := body.(wire.TaskEventBody)
+			mu.Lock()
+			arrival = append(arrival, tb.DeviceSeq)
+			mu.Unlock()
+			if err := conn.Ack(tb.DeviceID, tb.DeviceSeq); err != nil {
+				return
+			}
+		}
+	})
+	defer srv.Close()
+
+	store := newTestOutbox(t)
+	c := newTestClient(t, srv.URL(), store, nil)
+
+	var wg sync.WaitGroup
+	wg.Add(concurrent)
+	for i := 0; i < concurrent; i++ {
+		go func(i int) {
+			defer wg.Done()
+			if err := c.SendTaskEvent(TaskEvent{
+				TaskID:     fmt.Sprintf("run-%d", i),
+				Kind:       "started",
+				OccurredAt: time.Now(),
+			}); err != nil {
+				t.Errorf("SendTaskEvent(%d): %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	waitFor(t, 5*time.Second, func() bool {
+		pending, err := store.Pending(context.Background(), testSpace)
+		return err == nil && len(pending) == 0
+	})
+
+	mu.Lock()
+	got := append([]int64(nil), arrival...)
+	mu.Unlock()
+
+	seen := make(map[int64]bool, concurrent)
+	var order []int64
+	for _, seq := range got {
+		if !seen[seq] {
+			seen[seq] = true
+			order = append(order, seq)
+		}
+	}
+	for i := 1; i < len(order); i++ {
+		if order[i] <= order[i-1] {
+			t.Fatalf("device_seq out of order on the wire: first-seen order %v (full arrival log %v) — SPEC.md section 5.1 requires strictly increasing device_seq", order, got)
+		}
+	}
+	if len(order) != concurrent {
+		t.Fatalf("expected %d distinct device_seq values delivered, got %d: %v", concurrent, len(order), order)
+	}
 }

@@ -14,7 +14,6 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/outbox"
 	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/wire"
 )
 
@@ -42,6 +41,17 @@ type Client struct {
 	connected bool
 	attempt   int
 
+	// wake coalesces "check the outbox for new work" notifications into the
+	// single connection goroutine that owns writing reliable events to the
+	// wire (see connectAndServe's select loop and replayPending). It is
+	// intentionally never written to directly by anything other than
+	// wakeSender, and never read by anything other than connectAndServe:
+	// that single-writer/single-reader discipline is what guarantees
+	// device_seq order on the wire even when SendTaskEvent/SendMessageEvent
+	// are called concurrently, including during an in-flight replay after a
+	// reconnect (SPEC.md section 5.1).
+	wake chan struct{}
+
 	metrics *metricBatcher
 
 	seenMu    sync.Mutex
@@ -60,6 +70,7 @@ func New(cfg Config) *Client {
 	cfg.applyDefaults()
 	c := &Client{
 		cfg:     cfg,
+		wake:    make(chan struct{}, 1),
 		metrics: newMetricBatcher(cfg.MetricFlushInterval, cfg.MetricThrottledInterval),
 		seen:    make(map[string]bool),
 		closing: make(chan struct{}),
@@ -117,7 +128,7 @@ type TaskEvent struct {
 // survives in the outbox until acknowledged, across any number of
 // reconnects or process restarts.
 func (c *Client) SendTaskEvent(ev TaskEvent) error {
-	item, err := c.cfg.Outbox.Enqueue(context.Background(), c.cfg.Space, wire.TypeTaskEvent, func(seq int64) (json.RawMessage, error) {
+	_, err := c.cfg.Outbox.Enqueue(context.Background(), c.cfg.Space, wire.TypeTaskEvent, func(seq int64) (json.RawMessage, error) {
 		body := wire.TaskEventBody{
 			DeviceID:   c.cfg.DeviceID,
 			DeviceSeq:  seq,
@@ -138,7 +149,7 @@ func (c *Client) SendTaskEvent(ev TaskEvent) error {
 	if err != nil {
 		return err
 	}
-	c.trySendNow(item)
+	c.wakeSender()
 	return nil
 }
 
@@ -154,7 +165,7 @@ type MessageEvent struct {
 
 // SendMessageEvent durably enqueues a message event; see SendTaskEvent.
 func (c *Client) SendMessageEvent(ev MessageEvent) error {
-	item, err := c.cfg.Outbox.Enqueue(context.Background(), c.cfg.Space, wire.TypeMessageEvent, func(seq int64) (json.RawMessage, error) {
+	_, err := c.cfg.Outbox.Enqueue(context.Background(), c.cfg.Space, wire.TypeMessageEvent, func(seq int64) (json.RawMessage, error) {
 		id := ev.MessageID
 		if id == "" {
 			id = fmt.Sprintf("%s:%d", c.cfg.DeviceID, seq)
@@ -176,7 +187,7 @@ func (c *Client) SendMessageEvent(ev MessageEvent) error {
 	if err != nil {
 		return err
 	}
-	c.trySendNow(item)
+	c.wakeSender()
 	return nil
 }
 
@@ -188,28 +199,25 @@ func (c *Client) SendMetric(s wire.MetricSample) {
 	c.metrics.Offer(s)
 }
 
-// trySendNow best-effort writes one outbox item immediately if a
-// connection is currently up. On any failure it does nothing further: the
-// resend loop and the next reconnect's replay will pick it up.
-func (c *Client) trySendNow(item outbox.Item) {
-	c.mu.Lock()
-	conn := c.conn
-	connected := c.connected
-	c.mu.Unlock()
-	if !connected || conn == nil {
-		return
+// wakeSender notifies the active connection's single writer goroutine
+// (connectAndServe's select loop) that new work may be waiting in the
+// outbox. It never writes to the wire itself and is always safe to call,
+// including when no connection is currently up (the signal is simply
+// coalesced/dropped and the next connection's initial replayPending call
+// will pick up the item from durable storage regardless).
+//
+// This indirection — rather than writing directly from the caller's
+// goroutine, as a prior version of this code did — is what guarantees wire
+// order matches device_seq order (SPEC.md section 5.1): every reliable
+// event write, whether a fresh live send or a reconnect replay, now goes
+// through replayPending called from exactly one goroutine per connection,
+// so two writes for the same connection can never race each other onto the
+// wire out of order.
+func (c *Client) wakeSender() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
 	}
-	env, err := wire.NewEnvelope(item.Kind, newEnvelopeID(), c.nowMS(), json.RawMessage(item.Body))
-	if err != nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	data, err := env.Encode()
-	if err != nil {
-		return
-	}
-	_ = conn.Write(ctx, websocket.MessageText, data)
 }
 
 // ---- connection lifecycle ----
@@ -326,6 +334,13 @@ func (c *Client) connectAndServe() error {
 		case <-pongs:
 			lastPong = c.now()
 		case <-resendTicker.C:
+			c.replayPending(ctx, conn)
+		case <-c.wake:
+			// A live SendTaskEvent/SendMessageEvent call enqueued a new
+			// item. replayPending re-reads the full outbox (oldest seq
+			// first) and writes from this same goroutine, so it can never
+			// race a concurrent replay/resend for this connection — it
+			// simply folds into the same single-writer stream.
 			c.replayPending(ctx, conn)
 		case <-metricsTicker.C:
 			c.flushMetrics(ctx, conn)
