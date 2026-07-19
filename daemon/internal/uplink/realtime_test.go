@@ -119,7 +119,12 @@ loop:
 
 // TestRealtimeFlagOffPreservesExistingBehavior asserts the zero-value
 // (Realtime == nil) path is completely unaffected: everything still goes
-// over HTTP, exactly as before this feature existed.
+// over HTTP, exactly as before this feature existed. This also pins the
+// local-flag-off row of pollRealtimeMode's truth table: with the local
+// SITREP_REALTIME flag off, cmd/sitrep's newAgentRealtimeUplink never
+// constructs an rtclient.Client at all (see its doc comment), so
+// Config.Realtime is nil here exactly as it is in that path — there is no
+// Client, so structurally no dial ever happens, let alone a rejected one.
 func TestRealtimeFlagOffPreservesExistingBehavior(t *testing.T) {
 	var httpCap capture
 	httpSrv := httptest.NewServer(httpCap.handler(t))

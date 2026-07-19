@@ -9,6 +9,7 @@ package uplink
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -96,6 +97,13 @@ type Uplink struct {
 	residualMu sync.Mutex
 	residual   []func() error
 
+	// legacyMu guards legacyMode: whether the server has rejected the
+	// realtime dial (rtclient.ErrRealtimeDisabled) and this Uplink has
+	// switched the whole session to routing reliable events over the
+	// legacy /v2 HTTP path instead (see pollRealtimeMode).
+	legacyMu   sync.Mutex
+	legacyMode bool
+
 	ticksSinceSend int
 }
 
@@ -140,11 +148,13 @@ func (u *Uplink) Offer(ev Event) {
 	realtime := u.cfg.Realtime
 	u.mu.Unlock()
 
-	// Feature flag: when a realtime uplink is configured, every kind with a
-	// realtime-protocol equivalent is routed there instead of the HTTP
-	// batch below, so the same event is never sent both ways. task.log (no
-	// realtime equivalent) and any realtime send failure fall through.
-	if realtime != nil && u.routeToRealtime(realtime, ev) {
+	// Feature flag: when a realtime uplink is configured AND the server
+	// hasn't rejected it (see the truth table on pollRealtimeMode), every
+	// kind with a realtime-protocol equivalent is routed there instead of
+	// the HTTP batch below, so the same event is never sent both ways.
+	// task.log (no realtime equivalent) and any realtime send failure fall
+	// through.
+	if realtime != nil && !u.inLegacyMode() && u.routeToRealtime(realtime, ev) {
 		return
 	}
 
@@ -182,11 +192,15 @@ func (u *Uplink) Offer(ev Event) {
 // kind has no realtime equivalent (task.log).
 //
 // Reliable events (task.event/message.event) NEVER fall back to the legacy
-// /v2 HTTP path while the realtime flag is on, even when the send fails:
-// /v2 ingest writes UserStore, while /v3 viewers resume from SpaceHub, so
-// diverting so much as one terminal task.done/task.fail/message.send would
-// let a viewer permanently miss it. See sendReliable for what happens to a
-// send failure instead.
+// /v2 HTTP path while the realtime flag is on AND the server accepts
+// realtime, even when a single send attempt fails: /v2 ingest writes
+// UserStore, while /v3 viewers resume from SpaceHub, so diverting so much as
+// one terminal task.done/task.fail/message.send would let a viewer
+// permanently miss it. See sendReliable for what happens to a send failure
+// instead. (The one deliberate exception to "never falls back" is the
+// server-disabled whole-session legacy mode this Uplink switches into via
+// pollRealtimeMode — see that function's truth table — which routeToRealtime
+// is not even called under, per Offer's inLegacyMode guard.)
 func (u *Uplink) routeToRealtime(realtime *rtclient.Client, ev Event) bool {
 	switch ev.Kind {
 	case protocol.TaskStart, protocol.TaskProgress, protocol.TaskStep, protocol.TaskDone, protocol.TaskFail:
@@ -304,6 +318,245 @@ func (u *Uplink) wakeFlush() {
 	}
 }
 
+// inLegacyMode reports whether this Uplink is currently routing reliable
+// events over the legacy /v2 HTTP path because the server rejected the
+// realtime dial (see pollRealtimeMode).
+func (u *Uplink) inLegacyMode() bool {
+	u.legacyMu.Lock()
+	defer u.legacyMu.Unlock()
+	return u.legacyMode
+}
+
+// pollRealtimeMode is called once per flush tick from loop. It is the
+// daemon-side half of the server-capability truth table:
+//
+//	local SITREP_REALTIME | server /v3/realtime          | routing
+//	-----------------------|----------------------------|--------------------
+//	off                    | (never dialed)             | legacy /v2, always
+//	on                     | accepts (normal)           | realtime
+//	on                     | 403 realtime_disabled       | legacy /v2, whole
+//	                       |                             | session, until the
+//	                       |                             | client's own long-
+//	                       |                             | interval re-probe
+//	                       |                             | (see rtclient's
+//	                       |                             | serverDisabledRecheckInterval)
+//	                       |                             | succeeds again
+//
+// The local flag is enforced upstream: newAgentRealtimeUplink (cmd/sitrep)
+// never even constructs an rtclient.Client, let alone dials, when
+// SITREP_REALTIME is off, so cfg.Realtime is nil and this function is a
+// no-op (Offer's nil check on cfg.Realtime already covers that row).
+//
+// The remaining two rows are what this function drives: rtclient.Client
+// dials in the background on its own reconnect loop and exposes
+// ServerDisabled() as the result of its last dial attempt. When that flips
+// true, this Uplink switches its whole session to legacy routing (not just
+// the one event that happened to be in flight) and drains every event
+// already sitting durably in the outbox/overflow tables to /v2, in FIFO
+// order, so a terminal task state that arrived before the flag flipped
+// doesn't sit forever in a store no viewer reads. When it flips back to
+// false (the client's periodic re-probe succeeded), new events resume
+// routing to realtime immediately — there is no backlog to replay for
+// those, since legacy mode drained everything as it went.
+func (u *Uplink) pollRealtimeMode() {
+	rt := u.cfg.Realtime
+	if rt == nil {
+		return
+	}
+	disabled := rt.ServerDisabled()
+
+	u.legacyMu.Lock()
+	wasLegacy := u.legacyMode
+	u.legacyMode = disabled
+	u.legacyMu.Unlock()
+
+	if !disabled {
+		if wasLegacy {
+			u.cfg.Logf("uplink: realtime accepted again; resuming realtime routing for new events")
+		}
+		return
+	}
+	if !wasLegacy {
+		u.cfg.Logf("uplink: server rejected realtime (403 realtime_disabled); switching this session to legacy /v2 routing until it re-enables")
+	}
+	u.drainOutboxToLegacy(rt)
+}
+
+// drainOutboxToLegacy walks every reliable event durably sitting in rt's
+// outbox (real device_seq, ready to deliver) and then its overflow table (no
+// device_seq yet), oldest first in each, translating each one back into the
+// legacy uplink.Event shape and posting it to /v2/ingest. An item is only
+// retired (Ack for outbox items, DeleteOverflow for overflow items) once its
+// /v2 send actually succeeds; the first failure stops the whole drain for
+// this tick; the next flush tick resumes exactly where it left off, because
+// nothing was retired.
+//
+// Acking an outbox item may itself promote an overflow row into the outbox
+// (outbox.Store.Ack's own trigger) — the outer loop re-reads Pending() every
+// iteration rather than caching the initial list, so a promoted row is
+// picked up and drained in the same pass instead of waiting for the
+// overflow-scanning loop below.
+func (u *Uplink) drainOutboxToLegacy(rt *rtclient.Client) {
+	store := rt.Outbox()
+	space := rt.Space()
+	if store == nil {
+		return
+	}
+	ctx := context.Background()
+
+	for {
+		pending, err := store.Pending(ctx, space)
+		if err != nil {
+			u.cfg.Logf("uplink: legacy drain: read outbox: %v", err)
+			return
+		}
+		if len(pending) == 0 {
+			break
+		}
+		item := pending[0]
+		ev, ok := legacyEventFromOutboxItem(item.Kind, item.Body)
+		if !ok {
+			u.cfg.Logf("uplink: legacy drain: dropping outbox item with unrecognized kind %q", item.Kind)
+			if err := store.Ack(ctx, space, item.DeviceSeq); err != nil {
+				u.cfg.Logf("uplink: legacy drain: ack seq %d: %v", item.DeviceSeq, err)
+				return
+			}
+			continue
+		}
+		if !u.sendLegacySync(ev) {
+			return // /v2 unreachable right now; resume on the next tick
+		}
+		if err := store.Ack(ctx, space, item.DeviceSeq); err != nil {
+			u.cfg.Logf("uplink: legacy drain: ack seq %d: %v", item.DeviceSeq, err)
+			return
+		}
+	}
+
+	for {
+		overflow, err := store.OverflowPending(ctx, space)
+		if err != nil {
+			u.cfg.Logf("uplink: legacy drain: read overflow: %v", err)
+			return
+		}
+		if len(overflow) == 0 {
+			return
+		}
+		ov := overflow[0]
+		ev, ok := legacyEventFromOutboxItem(ov.Kind, ov.Body)
+		if !ok {
+			u.cfg.Logf("uplink: legacy drain: dropping overflow item with unrecognized kind %q", ov.Kind)
+			if err := store.DeleteOverflow(ctx, ov.ID); err != nil {
+				u.cfg.Logf("uplink: legacy drain: delete overflow id %d: %v", ov.ID, err)
+				return
+			}
+			continue
+		}
+		if !u.sendLegacySync(ev) {
+			return
+		}
+		if err := store.DeleteOverflow(ctx, ov.ID); err != nil {
+			u.cfg.Logf("uplink: legacy drain: delete overflow id %d: %v", ov.ID, err)
+			return
+		}
+	}
+}
+
+// sendLegacySync posts a single event to /v2/ingest synchronously and
+// reports whether the server accepted it (2xx). Unlike send (the normal
+// best-effort batch flusher, which retries a few times and then drops on
+// failure since telemetry is lossy by design), the legacy drain must know
+// definitively whether to retire the durable item it just sent, so it needs
+// a real success/failure signal rather than fire-and-forget.
+func (u *Uplink) sendLegacySync(ev Event) bool {
+	body, err := json.Marshal([]Event{ev})
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequest(http.MethodPost, u.cfg.ServerURL+"/v2/ingest", bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if u.cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+u.cfg.Token)
+	}
+	resp, err := u.client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// legacyEventFromOutboxItem reverse-translates a durably-stored reliable
+// event body (wire.TaskEventBody or wire.MessageEventBody JSON, as written
+// by routeToRealtime's forward direction) back into the legacy uplink.Event
+// shape /v2/ingest expects. ok is false for a kind this function does not
+// recognize (defensive; the outbox/overflow tables only ever hold the two
+// kinds routeToRealtime writes).
+func legacyEventFromOutboxItem(kind string, body json.RawMessage) (Event, bool) {
+	switch kind {
+	case wire.TypeTaskEvent:
+		var b wire.TaskEventBody
+		if err := json.Unmarshal(body, &b); err != nil {
+			return Event{}, false
+		}
+		k := legacyTaskKind(b.Kind)
+		if k == "" {
+			return Event{}, false
+		}
+		ev := Event{
+			Event: protocol.Event{
+				Kind:  k,
+				Title: b.Title,
+				Step:  b.Step,
+				Text:  b.Message,
+			},
+			SourceID: b.TaskID,
+			TS:       time.UnixMilli(b.OccurredAt).UTC().Format(time.RFC3339),
+		}
+		if b.Percent != nil {
+			ev.Percent = *b.Percent
+		}
+		if b.Display != nil {
+			ev.Icon, ev.Tint, ev.Template = b.Display.Icon, b.Display.Tint, b.Display.Template
+		}
+		return ev, true
+	case wire.TypeMessageEvent:
+		var b wire.MessageEventBody
+		if err := json.Unmarshal(body, &b); err != nil {
+			return Event{}, false
+		}
+		return Event{
+			Event:    protocol.Event{Kind: protocol.MessageSend, Text: b.Text, Level: b.Level},
+			SourceID: b.AutomationID,
+			TS:       time.UnixMilli(b.OccurredAt).UTC().Format(time.RFC3339),
+		}, true
+	default:
+		return Event{}, false
+	}
+}
+
+// legacyTaskKind reverses taskEventKind (wire task.event "kind" string back
+// to the protocol.Kind the legacy HTTP path expects). Empty return means
+// unrecognized.
+func legacyTaskKind(wireKind string) protocol.Kind {
+	switch wireKind {
+	case "started":
+		return protocol.TaskStart
+	case "progress":
+		return protocol.TaskProgress
+	case "step":
+		return protocol.TaskStep
+	case "done":
+		return protocol.TaskDone
+	case "failed":
+		return protocol.TaskFail
+	default:
+		return ""
+	}
+}
+
 func taskEventKind(k protocol.Kind) string {
 	switch k {
 	case protocol.TaskStart:
@@ -388,6 +641,7 @@ func (u *Uplink) loop() {
 		case <-u.kick:
 		}
 		u.drainResidual()
+		u.pollRealtimeMode()
 		batch, closed := u.drain()
 		if len(batch) > 0 {
 			u.send(batch)
