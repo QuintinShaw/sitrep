@@ -5,14 +5,12 @@ public extension APIClient {
     /// this client's REST `baseURL` by swapping the scheme and appending the
     /// realtime path.
     ///
-    /// NOTE for the protocol/server owner: `proto/realtime/SPEC.md` is
-    /// deliberately transport-independent and does not pin a concrete HTTP
-    /// path — this repository currently has no server-side realtime route
-    /// to confirm against (checked: no `server/src` file references
-    /// WebSockets or a realtime endpoint as of this change). `/v2/realtime`
-    /// is this client's assumption, chosen to match the existing `/v2/...`
-    /// REST surface; it is not yet a cross-implementation contract. Update
-    /// this in lockstep once the server lands its route.
+    /// `proto/realtime/SPEC.md` is deliberately transport-independent and
+    /// does not pin a concrete HTTP path; the cross-implementation route
+    /// convention is `/v3/realtime`, per protocol-owner ruling (the server
+    /// implementation targets the same path). Note this is intentionally
+    /// NOT `/v2/...`: the v2 prefix is the REST snapshot surface, while the
+    /// realtime channel lives under its own v3 route.
     var realtimeURL: URL? {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         switch components.scheme {
@@ -21,7 +19,7 @@ public extension APIClient {
         default: break
         }
         let base = components.path.hasSuffix("/") ? String(components.path.dropLast()) : components.path
-        components.path = base + "/v2/realtime"
+        components.path = base + "/v3/realtime"
         return components.url
     }
 }
