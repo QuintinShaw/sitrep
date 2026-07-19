@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "id": "dcs-env-01",
+  "ts": 1752486000000,
+  "body": {
+    "stage": "offer",
+    "device_id": "iphone-quintin-01",
+    "role": "viewer",
+    "protocol_versions": [1]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/unsubscribe.schema.json",
+  "title": "unsubscribe",
+  "description": "Sent by a viewer to voluntarily end its device's interest lease before expiry - one of only two ways a lease ends (the other being expires_at passing; a connection drop does NOT end a lease, see SPEC.md section 7). The server MUST release the lease immediately on receipt (it MUST NOT wait for expires_at) and MUST confirm with `ack{in_reply_to: <this envelope's id>}`, exactly as it confirms subscribe and interest.renew (but with no `lease` object, since none remains). If this removes the space's last active lease (1 -> 0 transition), the server MUST notify every connected source device with `command{origin: server, action: throttle}`.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "unsubscribe" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        }
+      }
+    }
+  ]
+}

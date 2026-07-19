@@ -1,0 +1,11 @@
+{
+  "type": "ack",
+  "id": "ile-env-02",
+  "ts": 1752484000010,
+  "body": {
+    "in_reply_to": "ile-env-01",
+    "lease": {
+      "expires_at": 1752484045010
+    }
+  }
+}

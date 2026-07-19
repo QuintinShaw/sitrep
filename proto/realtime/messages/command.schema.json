@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/command.schema.json",
+  "title": "command",
+  "description": "Reverse control instruction directed at one or more source devices. Two origins share this envelope type: 'viewer' (a human-initiated pause/resume/stop/run_now, relayed by the server) and 'server' (an interest-lease throttle/resume_rate notification the server generates itself; see SPEC.md 'Interest lease'). A client may only ever send origin 'viewer': the server MUST reject any client-sent command with origin 'server' with error code unauthorized, regardless of action. A viewer MUST set issued_by_device_id to its own authenticated device_id (the server MUST reject a mismatch with error code unauthorized). Per-action field exclusivity: pause/resume/stop require task_id and MUST NOT carry automation_id; run_now requires automation_id and MUST NOT carry task_id; throttle/resume_rate MUST carry neither. Relay rules: when the server relays a viewer command to a source it preserves the ORIGINAL envelope ts and command_id (only the envelope id is fresh), validates ttl at relay time, and the source re-validates ttl against its own local clock allowing +/- 30 s of clock skew. A source device deduplicates by command_id: receiving the same command_id twice MUST NOT execute the action twice. A command received or first actionable after envelope.ts + ttl_ms (with the skew allowance) MUST be dropped without executing it; the device that drops it SHOULD emit error{code: command_expired}.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "command" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command_id", "origin", "action", "ttl_ms"],
+          "properties": {
+            "command_id": {
+              "type": "string",
+              "description": "Idempotency key chosen by the sender. Preserved verbatim when the server relays the command.",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "origin": {
+              "type": "string",
+              "enum": ["viewer", "server"]
+            },
+            "issued_by_device_id": {
+              "$ref": "../common.schema.json#/$defs/device_id",
+              "description": "Required and meaningful only when origin is 'viewer': the authenticated device_id of the viewer that requested this command."
+            },
+            "action": {
+              "type": "string",
+              "enum": ["pause", "resume", "stop", "run_now", "throttle", "resume_rate"]
+            },
+            "task_id": {
+              "$ref": "../common.schema.json#/$defs/task_id",
+              "description": "The task run this command applies to. Required for pause/resume/stop; aligns with the HTTP control surface (POST /v2/tasks/:id/commands)."
+            },
+            "automation_id": {
+              "type": "string",
+              "description": "The automation this command applies to. Required for run_now.",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "target_device_id": {
+              "$ref": "../common.schema.json#/$defs/device_id",
+              "description": "The source device this command applies to. If absent, the command applies to every source device connected in the space (used for throttle/resume_rate broadcasts)."
+            },
+            "ttl_ms": {
+              "type": "integer",
+              "description": "How long after envelope.ts this command remains actionable.",
+              "minimum": 1,
+              "maximum": 86400000
+            },
+            "params": {
+              "type": "object",
+              "description": "Reserved extension point; protocol version 1 defines NO keys here. Unlike other objects in this protocol, additional properties here are explicitly permitted and MUST be ignored by a receiver that does not recognize them.",
+              "default": {}
+            }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "action": { "enum": ["pause", "resume", "stop"] } } },
+              "then": {
+                "required": ["origin", "issued_by_device_id", "task_id"],
+                "properties": { "origin": { "const": "viewer" } },
+                "not": { "required": ["automation_id"] }
+              }
+            },
+            {
+              "if": { "properties": { "action": { "const": "run_now" } } },
+              "then": {
+                "required": ["origin", "issued_by_device_id", "automation_id"],
+                "properties": { "origin": { "const": "viewer" } },
+                "not": { "required": ["task_id"] }
+              }
+            },
+            {
+              "if": { "properties": { "action": { "enum": ["throttle", "resume_rate"] } } },
+              "then": {
+                "properties": { "origin": { "const": "server" } },
+                "not": { "anyOf": [{ "required": ["task_id"] }, { "required": ["automation_id"] }] }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

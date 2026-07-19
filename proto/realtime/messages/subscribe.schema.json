@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/subscribe.schema.json",
+  "title": "subscribe",
+  "description": "Sent by a viewer to declare interest in a space, establishing (or replacing) that DEVICE's interest lease - leases are held per device, not per connection, survive a disconnect, and end only by expires_at passing or an explicit unsubscribe (see SPEC.md section 7). In the mandatory viewer connection sequence (hello -> subscribe -> resume) subscribe comes immediately after hello completes and before resume. The server MUST choose a lease duration between 30000 and 60000 ms inclusive and communicate the absolute deadline via `ack.body.lease.expires_at`. If this creates the space's first active lease (0 -> 1 transition of the space's lease count), the server MUST notify every connected source device with `command{origin: server, action: resume_rate}`. subscribe when the device already holds a lease replaces it entirely, including a full replacement of its topics.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "subscribe" },
+        "body": { "$ref": "#/$defs/body" }
+      }
+    }
+  ],
+  "$defs": {
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "topics": {
+          "type": "array",
+          "description": "Interest declaration. Omitted or empty means all topics. In protocol version 1 only the 'metric' topic has filtering effect (omitting it stops metric.frame forwarding to this device); 'task' and 'message' are advisory - the server MUST always deliver every reliable single-event delta to an active lease holder regardless of topics, because withholding any reliable event would break the viewer's revision continuity and force a resume loop.",
+          "items": { "type": "string", "enum": ["task", "metric", "message"] },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/hello.schema.json",
+  "title": "hello",
+  "description": "MUST be the first envelope sent on a new connection, in both directions. A connecting device sends a `stage: offer` hello (client -> server); the server responds with a `stage: accept` hello (server -> client) carrying the negotiated version. `stage: accept` belongs exclusively to the server: a client-sent accept, at any point in the connection's life, is a handshake violation the server MUST answer with error{code: hello_required} and a connection close. The client MUST NOT send ANY other envelope until it has received and validated the accept; the server MUST answer any frame received before it has sent its accept with error{code: hello_required} and close the connection. Recommended timeouts: the server SHOULD close a connection that sends no offer within 10 s of establishment; the client SHOULD close and reconnect if no accept arrives within 10 s of sending its offer.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "hello" },
+        "body": {
+          "oneOf": [
+            { "$ref": "#/$defs/offer" },
+            { "$ref": "#/$defs/accept" }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "offer": {
+      "type": "object",
+      "description": "Sent by the connecting device (source or viewer).",
+      "additionalProperties": false,
+      "required": ["stage", "device_id", "role", "protocol_versions"],
+      "properties": {
+        "stage": { "const": "offer" },
+        "device_id": { "$ref": "../common.schema.json#/$defs/device_id" },
+        "role": { "$ref": "../common.schema.json#/$defs/device_role" },
+        "protocol_versions": {
+          "type": "array",
+          "description": "Every protocol major version this device can speak, ascending, no duplicates.",
+          "items": { "$ref": "../common.schema.json#/$defs/protocol_version" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "type": "array",
+          "description": "Optional feature flags this device understands. Unknown flags MUST be ignored by the peer.",
+          "items": { "type": "string", "maxLength": 64 },
+          "default": []
+        }
+      }
+    },
+    "accept": {
+      "type": "object",
+      "description": "Sent by the server once it has chosen a protocol_version from the offer's intersection with its own supported set. If the intersection is empty the server MUST instead send `error` with code `version_unsupported` and close the connection; it MUST NOT send this envelope in that case.",
+      "additionalProperties": false,
+      "required": ["stage", "protocol_version", "session_id", "heartbeat_interval_ms"],
+      "properties": {
+        "stage": { "const": "accept" },
+        "protocol_version": { "$ref": "../common.schema.json#/$defs/protocol_version" },
+        "session_id": {
+          "type": "string",
+          "description": "Server-assigned identifier for this connection instance, for logging/observability only. Not a credential and not required for resume (see `resume`, which is keyed by space revision instead).",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 64 },
+          "default": []
+        },
+        "heartbeat_interval_ms": {
+          "type": "integer",
+          "description": "Interval at which the server will emit a bare `ping` text frame on this connection. Informative; the peer MAY also send its own `ping`s.",
+          "minimum": 1000,
+          "maximum": 300000
+        }
+      }
+    }
+  }
+}

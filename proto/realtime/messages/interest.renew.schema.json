@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/interest.renew.schema.json",
+  "title": "interest.renew",
+  "description": "Sent by a viewer before its current lease's expires_at to keep it alive. The server responds with `ack{lease:{expires_at}}` carrying a freshly computed deadline (again 30000-60000 ms out). interest.renew ALWAYS replaces the lease's topics wholesale with the topics in this request (omitted/empty meaning all topics) - it never merges with or preserves the previous topics. If the device holds no active lease when interest.renew arrives (e.g. it already lapsed, or none was ever established), the server MUST treat this identically to a fresh `subscribe` with the given topics, rather than rejecting it: this avoids a race between the viewer's local renewal timer and server-side expiry.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "interest.renew" },
+        "body": { "$ref": "subscribe.schema.json#/$defs/body" }
+      }
+    }
+  ]
+}

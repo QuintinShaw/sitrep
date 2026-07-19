@@ -1,0 +1,13 @@
+{
+  "type": "task.event",
+  "id": "arr-env-04",
+  "ts": 1752481001500,
+  "body": {
+    "device_id": "mac-quintin-01",
+    "device_seq": 11,
+    "task_id": "run-77c1",
+    "kind": "progress",
+    "occurred_at": 1752481001400,
+    "percent": 15
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "type": "subscribe",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X3A0",
+  "ts": 1752480010550,
+  "body": {
+    "topics": ["task", "automation"]
+  }
+}

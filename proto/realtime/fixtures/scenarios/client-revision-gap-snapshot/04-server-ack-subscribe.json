@@ -1,0 +1,11 @@
+{
+  "type": "ack",
+  "id": "crg-env-04",
+  "ts": 1752483000018,
+  "body": {
+    "in_reply_to": "crg-env-03",
+    "lease": {
+      "expires_at": 1752483045018
+    }
+  }
+}

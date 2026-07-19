@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "id": "crg-env-01",
+  "ts": 1752483000000,
+  "body": {
+    "stage": "offer",
+    "device_id": "ipad-quintin-01",
+    "role": "viewer",
+    "protocol_versions": [1]
+  }
+}

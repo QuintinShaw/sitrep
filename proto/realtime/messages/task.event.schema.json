@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/task.event.schema.json",
+  "title": "task.event",
+  "description": "Reliable event reporting a task lifecycle transition or progress update. UPLINK ONLY: sent by a source device to the server, never forwarded to viewers as a task.event envelope - the server re-emits it to subscribed viewers wrapped in a single-event `delta`, which carries the revision the viewer needs for alignment (see SPEC.md section 6). Persisted and increments space_revision by 1. Deduplicated by the server on (device_id, device_seq); the sender keeps retransmitting an unacked task.event (with its original device_seq, in a fresh envelope with a new envelope id) until it receives an `ack` that covers that device_seq. The server MUST reject a task.event whose body.device_id does not match the connection's authenticated device identity (error code unauthorized).",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "task.event" },
+        "body": { "$ref": "#/$defs/body" }
+      }
+    }
+  ],
+  "$defs": {
+    "body": {
+      "type": "object",
+      "allOf": [{ "$ref": "../common.schema.json#/$defs/reliability" }],
+      "additionalProperties": false,
+      "required": ["device_id", "device_seq", "task_id", "kind", "occurred_at"],
+      "properties": {
+        "device_id": { "$ref": "../common.schema.json#/$defs/device_id" },
+        "device_seq": { "$ref": "../common.schema.json#/$defs/device_seq" },
+        "task_id": { "$ref": "../common.schema.json#/$defs/task_id" },
+        "kind": { "$ref": "../common.schema.json#/$defs/task_kind" },
+        "occurred_at": {
+          "$ref": "../common.schema.json#/$defs/unix_ms_timestamp",
+          "description": "When this transition actually happened on the source device, independent of envelope.ts (send time)."
+        },
+        "title": { "$ref": "../common.schema.json#/$defs/free_text" },
+        "percent": {
+          "type": "integer",
+          "description": "Present when kind is 'progress'.",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "step": { "$ref": "../common.schema.json#/$defs/free_text" },
+        "message": {
+          "$ref": "../common.schema.json#/$defs/free_text",
+          "description": "Present when kind is 'done' or 'failed'."
+        },
+        "display": { "$ref": "../common.schema.json#/$defs/display_hints" }
+      },
+      "if": { "properties": { "kind": { "const": "progress" } } },
+      "then": { "required": ["percent"] }
+    }
+  }
+}

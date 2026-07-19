@@ -1,0 +1,12 @@
+{
+  "type": "metric.frame",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X1C0",
+  "ts": 1752480009900,
+  "body": {
+    "device_id": "mac-quintin-01",
+    "metrics": [
+      { "metric_id": "cpu.load", "value": "0.62", "label": "CPU load", "ts": 1752480009800 },
+      { "metric_id": "mem.used_gb", "value": "18.4", "ts": 1752480009800 }
+    ]
+  }
+}

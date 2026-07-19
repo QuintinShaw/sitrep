@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/error.schema.json",
+  "title": "error",
+  "description": "Diagnostic envelope. MAY be sent by any authenticated party (server, source, or viewer) about any other envelope; not restricted to server-to-client. `retryable` and `fatal` are authoritative and self-describing: a receiver MUST NOT need the SPEC.md error-code table to decide how to react, though that table documents the fixed values every code in this version always carries. See SPEC.md 'Error codes' for the full enumeration.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "error" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message", "retryable", "fatal"],
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": [
+                "version_unsupported",
+                "hello_required",
+                "unauthenticated",
+                "unauthorized",
+                "malformed",
+                "rate_limited",
+                "frame_too_large",
+                "batch_too_large",
+                "revision_unavailable",
+                "command_expired",
+                "sequence_gap",
+                "superseded",
+                "internal_error"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "description": "Human-readable, not machine-parsed. Implementations MUST branch only on `code`. For internal_error, this text MUST NOT contain stack traces, internal file paths, or other implementation details.",
+              "maxLength": 500
+            },
+            "in_reply_to": {
+              "$ref": "../common.schema.json#/$defs/envelope_id",
+              "description": "The id of the envelope this error concerns, when one is identifiable."
+            },
+            "retryable": {
+              "type": "boolean",
+              "description": "True if resending the same logical request (typically with a new envelope id) can plausibly succeed without any other change. When fatal is also true, 'retry' means: reconnect first, then retry on the new connection."
+            },
+            "fatal": {
+              "type": "boolean",
+              "description": "True if the sender will close the connection immediately after this envelope."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

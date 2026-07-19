@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/snapshot.schema.json",
+  "title": "snapshot",
+  "description": "Full current state of a space at a given revision, sent unicast to a single viewer, ONLY as a reply to `resume` (there is no other trigger). A snapshot MAY be split into multiple chunks to respect the frame size limit: every chunk carries the SAME `revision`, `part` numbers the chunks consecutively from 1, and `final: true` marks the last chunk. The receiver concatenates the tasks/metrics/messages/automations arrays across chunks and MUST NOT apply anything until the final chunk has arrived; a single-chunk snapshot is `part: 1, final: true`. While a chunked snapshot is in flight the server MUST defer every other outbound envelope on that connection (including control-plane acks) until after the final chunk - only ping/pong heartbeat text frames may interleave; a viewer receiving any other envelope between chunks treats it as a malformed sequence and MAY close and reconnect. A snapshot MAY be empty (all four arrays empty) - e.g. the reply to resume{last_revision: 0} on a fresh space. The `metrics` array is a best-effort convenience cache: metric samples are not persisted and not part of space_revision accounting, so this array MAY be empty or stale (e.g. after a server restart) even when metrics are actively flowing; a viewer MUST rely on subsequent metric.frame envelopes to refresh them. Never persisted itself and never increments space_revision.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "snapshot" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["revision", "part", "final", "tasks", "metrics", "messages", "automations"],
+          "properties": {
+            "revision": { "$ref": "../common.schema.json#/$defs/space_revision" },
+            "part": {
+              "type": "integer",
+              "description": "1-based chunk index. All chunks of one snapshot share the same revision and arrive consecutively, in order, on the same connection.",
+              "minimum": 1
+            },
+            "final": {
+              "type": "boolean",
+              "description": "True on the last chunk. The receiver applies the aggregated snapshot only after receiving the chunk with final: true."
+            },
+            "tasks": {
+              "type": "array",
+              "items": { "$ref": "../common.schema.json#/$defs/task_state" }
+            },
+            "metrics": {
+              "type": "array",
+              "description": "Best-effort, possibly empty or stale (see top-level description); refreshed by subsequent metric.frame envelopes.",
+              "items": { "$ref": "../common.schema.json#/$defs/metric_sample" }
+            },
+            "messages": {
+              "type": "array",
+              "description": "Recent messages only. The server keeps a bounded window (the most recent N; implementations SHOULD document their N, e.g. 200); truncation to this window is normative behavior, see SPEC.md section 6.4.",
+              "items": { "$ref": "../common.schema.json#/$defs/message_record" }
+            },
+            "automations": {
+              "type": "array",
+              "items": { "$ref": "../common.schema.json#/$defs/automation_state" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

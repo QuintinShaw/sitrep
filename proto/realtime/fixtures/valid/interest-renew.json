@@ -1,0 +1,8 @@
+{
+  "type": "interest.renew",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X1D1",
+  "ts": 1752480040000,
+  "body": {
+    "topics": ["task", "metric", "message"]
+  }
+}

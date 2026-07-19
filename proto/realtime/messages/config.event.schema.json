@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/config.event.schema.json",
+  "title": "config.event",
+  "description": "Server-minted reliable event reporting a configuration change (automation created/edited/removed). Configuration changes are initiated through the HTTP control plane, so the server is the sole writer: no client ever sends config.event, and its body carries NO device_id and NO device_seq - its identity IS the space_revision it occupies, so it does not participate in (device_id, device_seq) deduplication and is never acked by anyone. It is persisted and increments space_revision by 1 like every reliable event. Direction is server -> viewer only; in protocol version 1 the server delivers it to viewers inside delta.body.events (the single-event live delta, like every other reliable event), so a standalone config.event envelope does not normally appear on the wire - this schema exists to define the body shape referenced by delta.schema.json and to reserve the type.",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "config.event" },
+        "body": { "$ref": "#/$defs/body" }
+      }
+    }
+  ],
+  "$defs": {
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "automation_id", "occurred_at"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "'automation.upserted' covers both creation and any edit (the full new state is carried); 'automation.removed' deletes the automation.",
+          "enum": ["automation.upserted", "automation.removed"]
+        },
+        "automation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "automation": {
+          "$ref": "../common.schema.json#/$defs/automation_state",
+          "description": "Required when kind is 'automation.upserted'; absent when kind is 'automation.removed'."
+        },
+        "occurred_at": { "$ref": "../common.schema.json#/$defs/unix_ms_timestamp" }
+      },
+      "if": { "properties": { "kind": { "const": "automation.upserted" } } },
+      "then": { "required": ["automation"] }
+    }
+  }
+}

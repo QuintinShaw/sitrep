@@ -1,0 +1,8 @@
+{
+  "type": "ack",
+  "id": "arr-env-05",
+  "ts": 1752481001100,
+  "body": {
+    "acked": [{ "device_id": "mac-quintin-01", "device_seq": 10 }]
+  }
+}

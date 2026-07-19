@@ -1,0 +1,12 @@
+{
+  "type": "command",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X3H1",
+  "ts": 1752480060000,
+  "body": {
+    "command_id": "cmd-throttle-extra-field",
+    "origin": "server",
+    "action": "throttle",
+    "task_id": "run-2f9a",
+    "ttl_ms": 3600000
+  }
+}

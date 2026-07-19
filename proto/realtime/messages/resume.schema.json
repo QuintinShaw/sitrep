@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.sitrep.dev/realtime/v1/messages/resume.schema.json",
+  "title": "resume",
+  "description": "Sent by a viewer device to ask the server to bring it up to date. The mandatory connection sequence for a viewer is hello -> subscribe -> resume, and resume is REQUIRED on every connection (including a superseding reconnect): a connection becomes delta-eligible only once the server has sent its resume reply, and the server sends no live delta on it before then. resume MUST NOT be sent before this connection's subscribe has been sent. resume MUST produce exactly one reply, never silence: last_revision 0, or a gap the server cannot serve incrementally -> a `snapshot` (possibly split into chunks, possibly empty); last_revision equal to the space's current revision (and > 0) -> an empty `delta{from_revision: N, to_revision: N, events: []}` as the explicit you-are-current signal; otherwise -> one or more chained `delta`s covering the full range. last_revision greater than the space's current revision -> error{code: revision_unavailable}. See SPEC.md section 6.3. A source device does not send resume for its own outbound queue: it simply re-sends any unacked task.event/message.event it holds (see SPEC.md 'Agent reconnect replay flow').",
+  "allOf": [
+    { "$ref": "../envelope.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "type": { "const": "resume" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["last_revision"],
+          "properties": {
+            "last_revision": {
+              "$ref": "../common.schema.json#/$defs/space_revision",
+              "description": "The space_revision this viewer last fully applied. 0 means the viewer holds no prior state and always yields a snapshot (which MAY be empty on a fresh space)."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

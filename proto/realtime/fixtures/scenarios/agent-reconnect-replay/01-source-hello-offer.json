@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "id": "arr-env-01",
+  "ts": 1752481000000,
+  "body": {
+    "stage": "offer",
+    "device_id": "mac-quintin-01",
+    "role": "source",
+    "protocol_versions": [1]
+  }
+}

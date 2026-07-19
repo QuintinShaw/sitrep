@@ -1,0 +1,11 @@
+{
+  "type": "command",
+  "id": "ile-env-03",
+  "ts": 1752484045010,
+  "body": {
+    "command_id": "cmd-throttle-ile-1",
+    "origin": "server",
+    "action": "throttle",
+    "ttl_ms": 3600000
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "task.event",
+  "id": "arr-env-03",
+  "ts": 1752481001000,
+  "body": {
+    "device_id": "mac-quintin-01",
+    "device_seq": 10,
+    "task_id": "run-77c1",
+    "kind": "started",
+    "occurred_at": 1752481000900,
+    "title": "Encode video"
+  }
+}

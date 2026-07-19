@@ -1,0 +1,14 @@
+{
+  "type": "task.event",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X1A0",
+  "ts": 1752480003000,
+  "body": {
+    "device_id": "mac-quintin-01",
+    "device_seq": 53,
+    "task_id": "run-2f9a",
+    "kind": "started",
+    "occurred_at": 1752480002900,
+    "title": "Nightly backup",
+    "display": { "icon": "arrow.up.circle", "tint": "blue", "template": "progress" }
+  }
+}
