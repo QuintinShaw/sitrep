@@ -311,6 +311,19 @@ type TaskEvent struct {
 // its device_seq) and attempts immediate delivery if connected. The event
 // survives in the outbox until acknowledged, across any number of
 // reconnects or process restarts.
+//
+// outbox.ErrOverflowed is deliberately not surfaced as an error: per its own
+// doc comment it is informational, not a failure — the event is already
+// durably persisted (into outbox_overflow instead of outbox) by the time
+// Enqueue returns it, and "[c]allers must not retry or reroute on this
+// error". uplink.Uplink.sendReliable's own doc comment already assumes this
+// ("ordinary outbox-full backpressure durably overflows inside Enqueue and
+// never reaches here"): if this returned ErrOverflowed as a plain error,
+// sendReliable's persist-failure branch would re-attempt the exact same
+// Enqueue call every flush tick until capacity frees, each attempt durably
+// creating ANOTHER outbox_overflow row for the same logical event (Enqueue
+// does not deduplicate) — unbounded duplicate rows in an uncapped table,
+// only one of which is ever promoted and delivered.
 func (c *Client) SendTaskEvent(ev TaskEvent) error {
 	_, err := c.cfg.Outbox.Enqueue(context.Background(), c.cfg.Space, wire.TypeTaskEvent, func(seq int64) (json.RawMessage, error) {
 		body := wire.TaskEventBody{
@@ -330,7 +343,7 @@ func (c *Client) SendTaskEvent(ev TaskEvent) error {
 		}
 		return json.Marshal(body)
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, outbox.ErrOverflowed) {
 		return err
 	}
 	c.wakeSender()
@@ -347,7 +360,8 @@ type MessageEvent struct {
 	AutomationID string
 }
 
-// SendMessageEvent durably enqueues a message event; see SendTaskEvent.
+// SendMessageEvent durably enqueues a message event; see SendTaskEvent,
+// including why outbox.ErrOverflowed is not surfaced as an error here.
 func (c *Client) SendMessageEvent(ev MessageEvent) error {
 	_, err := c.cfg.Outbox.Enqueue(context.Background(), c.cfg.Space, wire.TypeMessageEvent, func(seq int64) (json.RawMessage, error) {
 		id := ev.MessageID
@@ -368,7 +382,7 @@ func (c *Client) SendMessageEvent(ev MessageEvent) error {
 		}
 		return json.Marshal(body)
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, outbox.ErrOverflowed) {
 		return err
 	}
 	c.wakeSender()
