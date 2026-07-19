@@ -140,9 +140,10 @@ func TestRealtimeFlagOffPreservesExistingBehavior(t *testing.T) {
 // event (task.event/message.event) diverted to /v2 while the realtime flag
 // is on could permanently vanish from a viewer's resume. When the realtime
 // outbox hits its row cap, the overflow event must NOT reach the HTTP
-// ingest spy at all — it stays queued locally (bounded backpressure) and is
-// retried until Enqueue succeeds, then delivered over realtime in seq
-// order once acks drain the backlog.
+// ingest spy at all — it is durably persisted into outbox_overflow (see
+// outbox.ErrOverflowed) rather than rejected, and delivered over realtime,
+// in the original offer order, once an ack frees outbox capacity and
+// promotes it (outbox.Store.PromoteOverflow).
 func TestOutboxFullNeverForksToHTTPAndRecovers(t *testing.T) {
 	var httpCap capture
 	httpSrv := httptest.NewServer(httpCap.handler(t))
@@ -229,11 +230,11 @@ func TestOutboxFullNeverForksToHTTPAndRecovers(t *testing.T) {
 	u.Offer(msg("first"))
 	waitForWS("first")
 
-	// 2. Second event: outbox is full -> ErrOutboxFull. Per the P0 fix this
-	// must NOT fall back to HTTP; it is queued locally (Uplink.rtRetry) and
-	// retried every flush tick while the outbox stays full. Give it several
-	// flush intervals to (wrongly) reach HTTP if the fallback regressed,
-	// then assert it never did.
+	// 2. Second event: outbox is full -> durably persisted into
+	// outbox_overflow (ErrOverflowed). Per the P0 fix this must NOT fall
+	// back to HTTP; it stays in overflow until an ack frees outbox capacity
+	// and promotes it. Give it several flush intervals to (wrongly) reach
+	// HTTP if the fallback regressed, then assert it never did.
 	u.Offer(msg("second"))
 	time.Sleep(200 * time.Millisecond)
 	for _, e := range httpCap.all() {
