@@ -526,3 +526,77 @@ func TestClientRejectsAckWithForeignDevicePair(t *testing.T) {
 		return err == nil && len(p) == 0
 	})
 }
+
+// TestClientThrottlePreservedAcrossReconnect pins the agreed semantics for
+// throttle state vs. reconnects: the daemon KEEPS its throttled state
+// across a connection drop (it does not optimistically resume the fast
+// cadence), and relies on the server re-sending the space's current
+// interest state (throttle or resume_rate) after hello on the new
+// connection — here, a resume_rate on the second connection immediately
+// restores the normal cadence.
+func TestClientThrottlePreservedAcrossReconnect(t *testing.T) {
+	var connNum int32
+	throttleProcessed := make(chan struct{})
+	conn2Ready := make(chan *rttest.Conn, 1)
+
+	srv := rttest.New(func(conn *rttest.Conn) {
+		n := atomic.AddInt32(&connNum, 1)
+		if _, err := conn.HelloAccept("sess", 1000); err != nil {
+			t.Errorf("HelloAccept: %v", err)
+			return
+		}
+		switch n {
+		case 1:
+			if err := conn.SendCommand(wire.CommandBody{
+				CommandID: "cmd-throttle-x", Origin: "server", Action: "throttle", TTLMs: 3600000,
+			}); err != nil {
+				t.Errorf("SendCommand: %v", err)
+				return
+			}
+			// Hold the connection open until the test has observed the
+			// throttled state, then drop it to force a reconnect.
+			<-throttleProcessed
+		default:
+			conn2Ready <- conn
+			for {
+				env, err := conn.ReadEnvelope()
+				if err == rttest.ErrPing {
+					conn.WritePong()
+					continue
+				}
+				if err != nil {
+					return
+				}
+				_ = env
+			}
+		}
+	})
+	defer srv.Close()
+
+	store := newTestOutbox(t)
+	c := newTestClient(t, srv.URL(), store, nil)
+
+	waitFor(t, 3*time.Second, c.MetricsThrottled)
+	close(throttleProcessed) // server drops connection 1
+
+	var conn2 *rttest.Conn
+	select {
+	case conn2 = <-conn2Ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client never reconnected")
+	}
+
+	// The throttled state survived the reconnect.
+	if !c.MetricsThrottled() {
+		t.Fatal("throttled state was lost across the reconnect; it must be preserved until the server says otherwise")
+	}
+
+	// The server re-sends the space's current interest state after hello:
+	// a resume_rate on the new connection restores the fast cadence.
+	if err := conn2.SendCommand(wire.CommandBody{
+		CommandID: "cmd-resume-x", Origin: "server", Action: "resume_rate", TTLMs: 3600000,
+	}); err != nil {
+		t.Fatalf("SendCommand(resume_rate): %v", err)
+	}
+	waitFor(t, 3*time.Second, func() bool { return !c.MetricsThrottled() })
+}
