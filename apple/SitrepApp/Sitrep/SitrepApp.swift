@@ -91,6 +91,12 @@ final class AppModel {
     /// once, non-disruptively, then cleared by the view that shows it.
     var supersededNotice = false
 
+    /// P0 gate: decides, from each REST refresh's `realtime_enabled`,
+    /// whether the RealtimeClient may connect. Pure decision logic lives in
+    /// `RealtimeCapabilityGate` (SitrepKit) so it's unit-testable without a
+    /// live socket; this property is the only thing that reads/drives it.
+    private var realtimeGate = RealtimeCapabilityGate()
+    var realtimeCapable: Bool { realtimeGate.isCapable }
     private var realtimeClient: RealtimeClient?
     private var realtimeObservers: [Task<Void, Never>] = []
     /// Last SpaceState received from the realtime channel, kept for the
@@ -144,6 +150,10 @@ final class AppModel {
         if realtimeClient != nil {
             stopRealtime()
             lastSpaceState = nil
+            // New credentials may point at a different server entirely —
+            // don't carry over the old one's capability; wait for this
+            // space's own refresh to confirm it before reconnecting.
+            realtimeGate.reset()
             enterForeground()
         }
     }
@@ -181,6 +191,10 @@ final class AppModel {
     }
 
     private func startRealtime() {
+        // The capability gate (P0): only ever connect once a REST refresh has
+        // confirmed `realtime_enabled == true`. Everything else in this
+        // method is unchanged pre-existing plumbing.
+        guard realtimeCapable else { return }
         guard let restClient = client, let url = restClient.realtimeURL, !deviceID.isEmpty else { return }
         if let existing = realtimeClient {
             // Idempotent on the actor side even if already running — this
@@ -214,6 +228,20 @@ final class AppModel {
             },
         ]
         Task { await rt.start() }
+    }
+
+    /// Apply the capability bit from a fresh REST refresh via the pure gate,
+    /// then act on whatever it decides: false→true may open a connection
+    /// (this refresh IS the "a refresh says true again" the P0 fix requires
+    /// before reconnecting); true→false (server rolled the flag back) tears
+    /// down any live connection and falls back to plain HTTP, matching the
+    /// pre-realtime app exactly.
+    private func applyRealtimeCapability(_ enabled: Bool) {
+        switch realtimeGate.apply(refreshedCapability: enabled) {
+        case .none: break
+        case .connect: startRealtime()
+        case .disconnect: stopRealtime()
+        }
     }
 
     private func stopRealtime() {
@@ -360,6 +388,9 @@ final class AppModel {
         stopRealtime()
         stopFallbackPolling()
         lastSpaceState = nil
+        // A future re-pair is a cold start for capability purposes too — no
+        // connecting on the new space until its own refresh confirms it.
+        realtimeGate.reset()
         if !deviceID.isEmpty {
             try? await client?.revokeDevice(id: deviceID)
         }
@@ -409,6 +440,7 @@ final class AppModel {
             presence = snapshot.presence
             lastError = nil
             lastSyncAt = .now
+            applyRealtimeCapability(snapshot.realtimeEnabled)
             // Checked AFTER the await, against the ACTOR's phase (not the
             // stream-fed MainActor cache): while the WebSocket is live,
             // deltas own the four reliable collections and an HTTP response
