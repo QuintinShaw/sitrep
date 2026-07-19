@@ -13,6 +13,12 @@ final class ScannerControl {
     func rejectAndResume(_ code: String) {
         coordinator?.reject(code)
     }
+
+    /// A transport/server failure, not a bad code: resume scanning without
+    /// blacklisting it so the same code can be retried.
+    func resume() {
+        coordinator?.resume()
+    }
 }
 
 struct JoinView: View {
@@ -240,11 +246,26 @@ struct JoinView: View {
             model.needsOnboarding = false
             await model.enableNotifications()
         } catch {
-            self.error = "连接失败：代码无效或已过期，请重新生成后再扫"
-            // Re-arm the scanner, ignoring this dead code so it doesn't
-            // re-trigger while still on screen.
-            scannerControl.rejectAndResume(code)
+            if Self.isRejectedByServer(error) {
+                self.error = "连接失败：代码无效或已过期，请重新生成后再扫"
+                // Re-arm the scanner, ignoring this dead code so it doesn't
+                // re-trigger while still on screen.
+                scannerControl.rejectAndResume(code)
+            } else {
+                self.error = "连接失败：请检查网络后重试"
+                // Not the code's fault — resume scanning without
+                // blacklisting it so the same code can be retried.
+                scannerControl.resume()
+            }
         }
+    }
+
+    /// Only an explicit 4xx from the server means the code itself is bad.
+    /// Transport failures, timeouts, and 5xx responses are the network's
+    /// or server's fault and shouldn't blacklist an otherwise-valid code.
+    private static func isRejectedByServer(_ error: Error) -> Bool {
+        guard case APIError.badStatus(let status) = error else { return false }
+        return (400..<500).contains(status)
     }
 }
 
@@ -489,6 +510,14 @@ struct CodeScanner: UIViewControllerRepresentable {
         /// A join with this code failed: don't fire on it again, resume.
         func reject(_ code: String) {
             rejected.insert(code)
+            fired = false
+            try? scanner?.startScanning()
+        }
+
+        /// A join failed for reasons unrelated to the code (network/server
+        /// error): resume scanning without blacklisting anything, so the
+        /// same code can trigger another attempt.
+        func resume() {
             fired = false
             try? scanner?.startScanning()
         }
