@@ -182,10 +182,43 @@ public struct SpaceSnapshot: Codable, Sendable {
     public var metrics: [SnapshotMetric]
     public var messages: [SnapshotMessage]
     public var automations: [AutomationInfo]
+    /// Server-declared realtime capability gate. Older servers never send
+    /// this field, and its absence must mean "no realtime" — decode
+    /// missing/null as `false`, never infer availability from anything else
+    /// (e.g. the presence of a `/v3/realtime` URL shape).
+    public var realtimeEnabled: Bool
 
     enum CodingKeys: String, CodingKey {
         case version, presence, tasks, metrics, messages, automations
         case generatedAt = "generated_at"
+        case realtimeEnabled = "realtime_enabled"
+    }
+
+    public init(
+        version: Int, generatedAt: Date, presence: PresenceInfo, tasks: [TaskState],
+        metrics: [SnapshotMetric], messages: [SnapshotMessage], automations: [AutomationInfo],
+        realtimeEnabled: Bool = false
+    ) {
+        self.version = version
+        self.generatedAt = generatedAt
+        self.presence = presence
+        self.tasks = tasks
+        self.metrics = metrics
+        self.messages = messages
+        self.automations = automations
+        self.realtimeEnabled = realtimeEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+        presence = try container.decode(PresenceInfo.self, forKey: .presence)
+        tasks = try container.decode([TaskState].self, forKey: .tasks)
+        metrics = try container.decode([SnapshotMetric].self, forKey: .metrics)
+        messages = try container.decode([SnapshotMessage].self, forKey: .messages)
+        automations = try container.decode([AutomationInfo].self, forKey: .automations)
+        realtimeEnabled = try container.decodeIfPresent(Bool.self, forKey: .realtimeEnabled) ?? false
     }
 }
 
