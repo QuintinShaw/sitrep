@@ -1,0 +1,10 @@
+{
+  "name": "sitrep-realtime-e2e-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Manual/CI-optional cross-line E2E smoke scripts for the realtime protocol viewer role, driven against a real locally running server (wrangler dev). See docs/design/realtime-integration.md for usage. Not part of any package's build or test graph.",
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
