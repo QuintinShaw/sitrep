@@ -1,3 +1,4 @@
+import AVFoundation
 import SitrepKit
 import SwiftUI
 import UIKit
@@ -271,83 +272,20 @@ struct JoinView: View {
 
 private struct ScannerJoinView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     let joining: Bool
     let error: String?
     let scannerControl: ScannerControl
     let onCode: (String) -> Void
 
+    @State private var cameraAuthorization = AVCaptureDevice.authorizationStatus(for: .video)
+    @State private var scanningError: String?
+
     var body: some View {
         NavigationStack {
             Group {
-                if DataScannerViewController.isSupported {
-                    ZStack {
-                        // Reentrancy is guarded synchronously: Coordinator's
-                        // `fired` flag stops it firing twice, and beginJoin's
-                        // `guard !joining` runs in the same actor turn as
-                        // this callback. (A `guard !joining` here would be
-                        // a no-op: makeCoordinator captures this closure
-                        // once, so it would forever see the `joining` value
-                        // from the sheet's first render.)
-                        CodeScanner(control: scannerControl, onCode: onCode)
-
-                        LinearGradient(
-                            colors: [.black.opacity(0.3), .clear, .black.opacity(0.42)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .allowsHitTesting(false)
-
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(
-                                .white.opacity(0.92),
-                                style: StrokeStyle(lineWidth: 2, dash: [10, 7])
-                            )
-                            .frame(maxWidth: 300)
-                            .aspectRatio(4.6, contentMode: .fit)
-                            .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
-                            .allowsHitTesting(false)
-
-                        VStack(spacing: 12) {
-                            Spacer()
-
-                            if let error {
-                                Label(error, systemImage: "exclamationmark.circle.fill")
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 10)
-                                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                            }
-
-                            Label("将 Mac 上的连接码放入框内", systemImage: "viewfinder")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 9)
-                                .background(.ultraThinMaterial, in: Capsule())
-                        }
-                        .padding()
-                        .allowsHitTesting(false)
-
-                        if joining {
-                            Rectangle()
-                                .fill(.regularMaterial)
-                            ProgressView("正在连接…")
-                                .font(.headline)
-                        }
-                    }
-                    .accessibilityLabel("连接码扫描器")
-                    .animation(.snappy, value: error)
-                } else {
-                    ContentUnavailableView(
-                        "无法使用相机扫描",
-                        systemImage: "camera.fill",
-                        description: Text("请返回并选择手动输入")
-                    )
-                }
+                content
             }
             .background(Color(.systemBackground).ignoresSafeArea())
             .navigationTitle("扫描连接码")
@@ -360,6 +298,132 @@ private struct ScannerJoinView: View {
             }
         }
         .interactiveDismissDisabled(joining)
+        .task { await refreshCameraAuthorization() }
+        // Coming back from Settings after granting access should revive
+        // the scanner without requiring the sheet to be reopened.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await refreshCameraAuthorization() } }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if !DataScannerViewController.isSupported {
+            ContentUnavailableView(
+                "无法使用相机扫描",
+                systemImage: "camera.fill",
+                description: Text("请返回并选择手动输入")
+            )
+        } else if let scanningError {
+            ContentUnavailableView(
+                "无法启动相机",
+                systemImage: "camera.fill.badge.ellipsis",
+                description: Text(scanningError)
+            )
+        } else {
+            switch cameraAuthorization {
+            case .authorized:
+                scannerOverlay
+            case .denied, .restricted:
+                cameraPermissionDeniedView
+            case .notDetermined:
+                ProgressView()
+            @unknown default:
+                ProgressView()
+            }
+        }
+    }
+
+    private var scannerOverlay: some View {
+        ZStack {
+            // Reentrancy is guarded synchronously: Coordinator's
+            // `fired` flag stops it firing twice, and beginJoin's
+            // `guard !joining` runs in the same actor turn as
+            // this callback. (A `guard !joining` here would be
+            // a no-op: makeCoordinator captures this closure
+            // once, so it would forever see the `joining` value
+            // from the sheet's first render.)
+            CodeScanner(
+                control: scannerControl,
+                onCode: onCode,
+                onScanningError: { scanningError = $0 }
+            )
+
+            LinearGradient(
+                colors: [.black.opacity(0.3), .clear, .black.opacity(0.42)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .allowsHitTesting(false)
+
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(
+                    .white.opacity(0.92),
+                    style: StrokeStyle(lineWidth: 2, dash: [10, 7])
+                )
+                .frame(maxWidth: 300)
+                .aspectRatio(4.6, contentMode: .fit)
+                .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+                .allowsHitTesting(false)
+
+            VStack(spacing: 12) {
+                Spacer()
+
+                if let error {
+                    Label(error, systemImage: "exclamationmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                Label("将 Mac 上的连接码放入框内", systemImage: "viewfinder")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .padding()
+            .allowsHitTesting(false)
+
+            if joining {
+                Rectangle()
+                    .fill(.regularMaterial)
+                ProgressView("正在连接…")
+                    .font(.headline)
+            }
+        }
+        .accessibilityLabel("连接码扫描器")
+        .animation(.snappy, value: error)
+    }
+
+    private var cameraPermissionDeniedView: some View {
+        ContentUnavailableView {
+            Label("需要相机权限", systemImage: "camera.fill")
+        } description: {
+            Text("请在系统设置中允许 Sitrep 使用相机以扫描连接码")
+        } actions: {
+            Button("打开设置") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private func refreshCameraAuthorization() async {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        if status == .notDetermined {
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            cameraAuthorization = granted ? .authorized : .denied
+        } else {
+            cameraAuthorization = status
+        }
     }
 }
 
@@ -443,6 +507,7 @@ private struct ManualJoinView: View {
 struct CodeScanner: UIViewControllerRepresentable {
     var control: ScannerControl?
     var onCode: (String) -> Void
+    var onScanningError: ((String) -> Void)?
 
     func makeUIViewController(context: Context) -> DataScannerViewController {
         let vc = DataScannerViewController(
@@ -459,13 +524,16 @@ struct CodeScanner: UIViewControllerRepresentable {
         vc.delegate = context.coordinator
         context.coordinator.scanner = vc
         control?.coordinator = context.coordinator
-        try? vc.startScanning()
+        let coordinator = context.coordinator
         Task { @MainActor [weak vc] in
             // SwiftUI lays out the hosted controller after creation. Yield
-            // once so the ROI is calculated from the final camera bounds.
+            // once so the ROI is calculated from the final camera bounds,
+            // and so a startScanning failure (which reports back into
+            // SwiftUI state) isn't raised mid view-update.
             await Task.yield()
             guard let vc else { return }
             Self.updateRegionOfInterest(vc)
+            coordinator.start()
         }
         return vc
     }
@@ -498,20 +566,35 @@ struct CodeScanner: UIViewControllerRepresentable {
         vc.stopScanning()
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onCode: onCode) }
+    func makeCoordinator() -> Coordinator { Coordinator(onCode: onCode, onScanningError: onScanningError) }
 
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         let onCode: (String) -> Void
+        let onScanningError: ((String) -> Void)?
         weak var scanner: DataScannerViewController?
         private var fired = false
         private var rejected: Set<String> = []
-        init(onCode: @escaping (String) -> Void) { self.onCode = onCode }
+
+        init(onCode: @escaping (String) -> Void, onScanningError: ((String) -> Void)?) {
+            self.onCode = onCode
+            self.onScanningError = onScanningError
+        }
+
+        /// Starts (or restarts) the scanner, surfacing a failure instead of
+        /// silently swallowing it with `try?`.
+        func start() {
+            do {
+                try scanner?.startScanning()
+            } catch {
+                onScanningError?(error.localizedDescription)
+            }
+        }
 
         /// A join with this code failed: don't fire on it again, resume.
         func reject(_ code: String) {
             rejected.insert(code)
             fired = false
-            try? scanner?.startScanning()
+            start()
         }
 
         /// A join failed for reasons unrelated to the code (network/server
@@ -519,7 +602,7 @@ struct CodeScanner: UIViewControllerRepresentable {
         /// same code can trigger another attempt.
         func resume() {
             fired = false
-            try? scanner?.startScanning()
+            start()
         }
 
         // OCR refines transcripts over time (didUpdate) and may split one
