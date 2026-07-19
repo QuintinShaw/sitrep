@@ -1,5 +1,7 @@
 // Required coverage #8 (connection gating), #9 (supersede).
+import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import type { SpaceHub } from "../../src/realtime/space-hub.ts";
 import { bootstrapSpace, connect, helloOffer, helloSource, nextId, resume, subscribe } from "./helpers";
 
 describe("connection gating", () => {
@@ -62,7 +64,7 @@ describe("connection gating", () => {
   });
 
   it("supersede: an older connection for the same device is closed with `superseded`, not `throttle`", async () => {
-    const { source, viewer } = await bootstrapSpace();
+    const { source, viewer, spaceId } = await bootstrapSpace();
 
     const first = await connect(source.token);
     await helloSource(first, source.device_id);
@@ -87,6 +89,22 @@ describe("connection gating", () => {
     expect(supersededErr.body.code).toBe("superseded");
     expect(supersededErr.body.fatal).toBe(true);
     await first.waitForClose();
+
+    // Product invariant 5: supersession must never be silent — it's a
+    // security-relevant event (possible credential/session reuse) and must
+    // always produce a server-side log, independent of the wire error sent
+    // above. Console output can't be captured across the workerd/vitest
+    // process boundary, so inspect the DO's in-memory security event log
+    // directly via runInDurableObject (same pattern used in errors.workers.ts).
+    const stub = env.SPACE_HUB.getByName(spaceId);
+    const securityEvents = await runInDurableObject(
+      stub,
+      async (instance: SpaceHub) => (instance as any).securityEventLog as Array<{ event: string; data: Record<string, unknown> }>,
+    );
+    const supersededLog = securityEvents.find((e) => e.event === "superseded");
+    expect(supersededLog).toBeDefined();
+    expect(supersededLog?.data.device_id).toBe(source.device_id);
+    expect(supersededLog?.data.role).toBe("source");
 
     // The new connection is fully functional.
     second.send({
