@@ -334,6 +334,7 @@ private struct ScannerJoinView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭", systemImage: "xmark") { dismiss() }
+                        .disabled(joining)
                 }
             }
         }
@@ -406,6 +407,7 @@ private struct ManualJoinView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭", systemImage: "xmark") { dismiss() }
+                        .disabled(joining)
                 }
             }
         }
