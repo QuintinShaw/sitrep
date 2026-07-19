@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createApp } from "../src/app.ts";
+import { createApp, parseRealtimeEnabledFlag } from "../src/app.ts";
 import { SqliteStore } from "../src/sqlite-store.ts";
 
 function testApp() {
@@ -19,6 +19,23 @@ test("v2 snapshot realtime_enabled reflects the configured var", async () => {
   const app = createApp({ store: () => store, realtimeEnabled: () => true });
   const snapshot = await (await app.request("/v2/snapshot")).json() as { realtime_enabled: boolean };
   assert.equal(snapshot.realtime_enabled, true);
+});
+
+test("parseRealtimeEnabledFlag: only true/'true'/'1' enable, everything else disables", () => {
+  // Dashboard variable overrides always arrive as strings at runtime even
+  // though wrangler.jsonc declares REALTIME_ENABLED as boolean — a naive
+  // Boolean(value) would treat the string "false" as truthy. This parser
+  // must be a strict allow-list, not a truthiness check.
+  const enabling: Array<string | boolean> = ["true", "TRUE ", " true", "1"];
+  for (const value of enabling) {
+    assert.equal(parseRealtimeEnabledFlag(value), true, `expected ${JSON.stringify(value)} to enable`);
+  }
+  assert.equal(parseRealtimeEnabledFlag(true), true);
+
+  const disabling: Array<string | boolean | undefined> = [false, "false", "0", "", undefined, "yes", "TRUE_ISH", "truex"];
+  for (const value of disabling) {
+    assert.equal(parseRealtimeEnabledFlag(value), false, `expected ${JSON.stringify(value)} to disable`);
+  }
 });
 
 test("Node ingest returns success and records presence", async () => {

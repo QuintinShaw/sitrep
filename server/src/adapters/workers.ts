@@ -3,7 +3,7 @@
 // token in the AUTH_TOKEN secret. Live Activity pushes fire from inside the
 // DO after each state change (via waitUntil, off the ingest critical path).
 import { DurableObject } from "cloudflare:workers";
-import { createApp, newToken, TOKEN_RE, type Command, type DeviceInfo, type Role, type SpaceRegistry } from "../app.ts";
+import { createApp, newToken, parseRealtimeEnabledFlag, TOKEN_RE, type Command, type DeviceInfo, type Role, type SpaceRegistry } from "../app.ts";
 import { endActivity, sendAlert, startActivity, updateActivity, type ApnsConfig } from "../apns.ts";
 import { SpaceHub } from "../realtime/space-hub.ts";
 import type { AutomationExecutorKind, AutomationState } from "../realtime/types.ts";
@@ -44,7 +44,11 @@ interface Secrets {
   APNS_TEAM_ID?: string;
   APNS_BUNDLE_ID?: string; // var, wrangler.jsonc
   APNS_HOST?: string; // var, wrangler.jsonc
-  REALTIME_ENABLED?: boolean; // var, wrangler.jsonc; unset/false disables /v3/realtime
+  // var, wrangler.jsonc; unset/false disables /v3/realtime. Typed as string |
+  // boolean because a Cloudflare dashboard variable override always arrives
+  // as a string at runtime, even though wrangler.jsonc declares it boolean —
+  // see parseRealtimeEnabledFlag in app.ts for the strict parsing this needs.
+  REALTIME_ENABLED?: string | boolean;
 }
 
 type WorkerEnv = Env & Secrets;
@@ -484,7 +488,7 @@ const app = createApp({
     await (c.env as WorkerEnv).INVITE_DIR.put(code, space, { expirationTtl: 600 });
   },
   lookupInvite: (c, code) => (c.env as WorkerEnv).INVITE_DIR.get(code),
-  realtimeEnabled: (c) => Boolean((c.env as WorkerEnv).REALTIME_ENABLED),
+  realtimeEnabled: (c) => parseRealtimeEnabledFlag((c.env as WorkerEnv).REALTIME_ENABLED),
 });
 
 app.get("/debug/tokens", async (c: any) => {
