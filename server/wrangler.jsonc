@@ -9,7 +9,11 @@
   "kv_namespaces": [{ "binding": "INVITE_DIR", "id": "490111734d5246cc949f0eec1c0ca0f3" }],
   "vars": {
     "APNS_BUNDLE_ID": "dev.sitrep.app",
-    "APNS_HOST": "api.sandbox.push.apple.com"
+    "APNS_HOST": "api.sandbox.push.apple.com",
+    // Server-side kill switch for /v3/realtime auto-connect (Fix A, pre-merge
+    // review). Absent/false means disabled; flip to true per-environment to
+    // enable. No per-space granularity in v1.
+    "REALTIME_ENABLED": false
   },
   "durable_objects": {
     "bindings": [

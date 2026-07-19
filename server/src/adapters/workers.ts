@@ -44,6 +44,7 @@ interface Secrets {
   APNS_TEAM_ID?: string;
   APNS_BUNDLE_ID?: string; // var, wrangler.jsonc
   APNS_HOST?: string; // var, wrangler.jsonc
+  REALTIME_ENABLED?: boolean; // var, wrangler.jsonc; unset/false disables /v3/realtime
 }
 
 type WorkerEnv = Env & Secrets;
@@ -483,6 +484,7 @@ const app = createApp({
     await (c.env as WorkerEnv).INVITE_DIR.put(code, space, { expirationTtl: 600 });
   },
   lookupInvite: (c, code) => (c.env as WorkerEnv).INVITE_DIR.get(code),
+  realtimeEnabled: (c) => Boolean((c.env as WorkerEnv).REALTIME_ENABLED),
 });
 
 app.get("/debug/tokens", async (c: any) => {

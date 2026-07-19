@@ -69,6 +69,11 @@ export interface AppOptions {
    * joining by code alone needs a code→space lookup with TTL. */
   publishInvite?: (c: Context, code: string, space: string) => Promise<void>;
   lookupInvite?: (c: Context, code: string) => Promise<string | null>;
+  /** Realtime kill switch (`/v3/realtime`): a Wrangler `vars` entry
+   * (`REALTIME_ENABLED`), no per-space granularity in v1. Absent on older
+   * deployments that don't wire this option, which must mean disabled — so
+   * the default below is `false`, never `true`. */
+  realtimeEnabled?: (c: Context) => boolean;
 }
 
 type Vars = { Variables: { role: Role; space: string; deviceId?: string } };
@@ -242,14 +247,20 @@ export function createApp(opts: AppOptions) {
       s.automations(),
       s.presence(),
     ]);
-    return c.json(makeSnapshot({
-      now: new Date().toISOString(),
-      presence,
-      tasks: visibleTasks(tasks, false),
-      metrics: metrics.map((metric) => mergeMetric(metric, prefs)),
-      events,
-      automations,
-    }));
+    return c.json({
+      ...makeSnapshot({
+        now: new Date().toISOString(),
+        presence,
+        tasks: visibleTasks(tasks, false),
+        metrics: metrics.map((metric) => mergeMetric(metric, prefs)),
+        events,
+        automations,
+      }),
+      // Apple client's server-side kill switch for /v3/realtime auto-connect
+      // (see AppOptions.realtimeEnabled): missing or unset must read as
+      // disabled, so this defaults to false rather than being omitted.
+      realtime_enabled: opts.realtimeEnabled ? opts.realtimeEnabled(c) : false,
+    });
   });
 
   app.get("/v2/automations", async (c) => {

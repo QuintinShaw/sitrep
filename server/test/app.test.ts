@@ -8,6 +8,19 @@ function testApp() {
   return createApp({ store: () => store });
 }
 
+test("v2 snapshot realtime_enabled defaults false when unwired", async () => {
+  const app = testApp();
+  const snapshot = await (await app.request("/v2/snapshot")).json() as { realtime_enabled: boolean };
+  assert.equal(snapshot.realtime_enabled, false);
+});
+
+test("v2 snapshot realtime_enabled reflects the configured var", async () => {
+  const store = new SqliteStore(":memory:");
+  const app = createApp({ store: () => store, realtimeEnabled: () => true });
+  const snapshot = await (await app.request("/v2/snapshot")).json() as { realtime_enabled: boolean };
+  assert.equal(snapshot.realtime_enabled, true);
+});
+
 test("Node ingest returns success and records presence", async () => {
   const app = testApp();
   const response = await app.request("/v2/ingest", {
