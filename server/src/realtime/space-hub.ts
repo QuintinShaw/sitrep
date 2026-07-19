@@ -86,12 +86,26 @@ function canonicalJson(value: unknown): string {
 }
 
 export class SpaceHub extends DurableObject<Env> {
+  /** Current schema version this build expects. Bump when `migrate()`'s
+   * DDL block changes, alongside adding whatever new `CREATE TABLE/INDEX
+   * IF NOT EXISTS` statements the change needs. */
+  private static readonly SCHEMA_VERSION = 1;
+
   /** Best-effort metric cache (SPEC.md section 6.2: snapshot.metrics is a
    * convenience cache, allowed to be empty/stale, outside space_revision
    * accounting) — deliberately in-memory only, never written to SQLite. */
   private metricsCache = new Map<string, MetricSample>();
   private rateLimiters = new WeakMap<WebSocket, RateLimiterState>();
   private hotPathCounter = 0;
+
+  /** Set true only when migrate() actually executed the DDL block during
+   * this construct, as opposed to finding the store already at
+   * SCHEMA_VERSION and returning without touching SQLite. Exists purely
+   * so tests can assert the 10+ `CREATE TABLE/INDEX IF NOT EXISTS`
+   * statements do NOT re-run on every hibernation wake (DO constructors
+   * re-run on wake; see the constructor's migrate() call and the
+   * space-hub.ts cost notes) — never read by production logic. */
+  private ranMigrationDdl = false;
 
   /** Injectable for tests: decides whether the Nth hot-path event gets
    * logged. Default samples at <=1%. Errors always log regardless of this
@@ -117,8 +131,25 @@ export class SpaceHub extends DurableObject<Env> {
     this.migrate();
   }
 
+  /** Runs the schema DDL exactly once per store lifetime, not once per DO
+   * construct. DO constructors re-run on every hibernation wake (that's
+   * the whole point of hibernation — the JS instance is cheap to recreate,
+   * the SQLite store is what's durable), so unconditionally re-issuing
+   * 10+ `CREATE TABLE/INDEX IF NOT EXISTS` statements here would mean
+   * every wake pays for a full schema scan, defeating the sparse-
+   * connection cost goals documented in realtime-server.md. Instead: one
+   * lightweight version read, and the DDL block (plus the version write)
+   * only runs when the store is behind — including the fresh-DO case,
+   * where the version table itself doesn't exist yet. */
   private migrate(): void {
+    if (this.schemaVersion() >= SpaceHub.SCHEMA_VERSION) return;
+
+    this.ranMigrationDdl = true;
     this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS _schema_migrations (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS space_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -193,6 +224,29 @@ export class SpaceHub extends DurableObject<Env> {
         delivered INTEGER NOT NULL DEFAULT 0
       );
     `);
+    // Same synchronous, no-`await`-in-between transaction as the DDL above
+    // (see the class-level concurrency note) — the version write is
+    // atomic with the schema it describes.
+    this.ctx.storage.sql.exec(
+      `INSERT INTO _schema_migrations (id, version) VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET version = excluded.version`,
+      SpaceHub.SCHEMA_VERSION,
+    );
+  }
+
+  /** One lightweight SELECT: current schema version, or 0 for a fresh DO
+   * (the `_schema_migrations` table itself doesn't exist yet, which throws
+   * rather than returning zero rows — SQLite has no "does this table
+   * exist" query result short of inspecting sqlite_master, and a bare
+   * SELECT-that-may-throw is cheaper and simpler than checking
+   * sqlite_master first on every call). */
+  private schemaVersion(): number {
+    try {
+      const row = this.ctx.storage.sql.exec<{ version: number }>("SELECT version FROM _schema_migrations WHERE id = 1").toArray()[0];
+      return row?.version ?? 0;
+    } catch {
+      return 0;
+    }
   }
 
   // ---- WebSocket entry point ----
