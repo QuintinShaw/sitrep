@@ -160,7 +160,12 @@ func (u *Uplink) Offer(ev Event) {
 // event, or leaves it (false) to fall through unchanged — either because
 // the kind has no realtime equivalent (task.log) or because the realtime
 // send itself failed, in which case losing the event silently would be
-// worse than a harmless duplicate over HTTP.
+// worse than a harmless duplicate over HTTP. In particular, a full
+// realtime outbox (outbox.ErrOutboxFull — the bounded local queue hit its
+// row cap because the server has not been acking) lands here as a send
+// failure: the event travels the HTTP ingest path instead, so reliability
+// does not degrade while local disk usage stays bounded, and once acks
+// drain the backlog subsequent events take the realtime path again.
 func (u *Uplink) routeToRealtime(realtime *rtclient.Client, ev Event) bool {
 	switch ev.Kind {
 	case protocol.TaskStart, protocol.TaskProgress, protocol.TaskStep, protocol.TaskDone, protocol.TaskFail:

@@ -16,11 +16,27 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+// DefaultMaxRows bounds the outbox's total row count (across all spaces).
+// The cap keeps local disk usage bounded when the server is unreachable
+// for a long stretch; reliability does not degrade at the cap because the
+// caller's contract is to fall back to another delivery path (the HTTP
+// ingest batch) whenever Enqueue fails — see ErrOutboxFull.
+const DefaultMaxRows = 5000
+
+// ErrOutboxFull is returned (wrapped) by Enqueue when the outbox already
+// holds its maximum number of unacknowledged rows. No device_seq is
+// consumed in that case — the failed Enqueue's transaction rolls back
+// whole, exactly like any other Enqueue failure — so callers can safely
+// route the event to a fallback path (the HTTP ingest batch) and let
+// later events use the realtime path again once acks drain the backlog.
+var ErrOutboxFull = errors.New("outbox: full")
 
 const schema = `
 CREATE TABLE IF NOT EXISTS space_seq_counters (
@@ -50,12 +66,23 @@ type Item struct {
 // from multiple goroutines: every method serializes through the underlying
 // *sql.DB, and every mutating operation is one transaction.
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	maxRows int
 }
 
-// Open creates (if needed) and opens the outbox database at path. Callers
-// should keep one *Store per daemon process for a given path.
+// Open creates (if needed) and opens the outbox database at path with the
+// DefaultMaxRows cap. Callers should keep one *Store per daemon process
+// for a given path.
 func Open(path string) (*Store, error) {
+	return OpenWithMaxRows(path, DefaultMaxRows)
+}
+
+// OpenWithMaxRows is Open with an explicit row cap; maxRows <= 0 falls
+// back to DefaultMaxRows.
+func OpenWithMaxRows(path string, maxRows int) (*Store, error) {
+	if maxRows <= 0 {
+		maxRows = DefaultMaxRows
+	}
 	// _txlock=immediate: acquire the write lock at BEGIN rather than at
 	// first write, so two overlapping transactions serialize instead of
 	// racing to upgrade a deferred lock (SQLITE_BUSY under concurrent
@@ -72,7 +99,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("outbox: init schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, maxRows: maxRows}, nil
 }
 
 // Close releases the underlying database handle.
@@ -97,6 +124,18 @@ func (s *Store) Enqueue(ctx context.Context, space, kind string, build BuildBody
 		return Item{}, fmt.Errorf("outbox: begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+
+	// Row cap check, inside the same transaction as the insert so two
+	// concurrent Enqueues cannot both squeeze past the limit. At the cap
+	// the whole transaction rolls back — no seq consumed, no row written —
+	// and the caller falls back to its non-realtime delivery path.
+	var rows int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM outbox`).Scan(&rows); err != nil {
+		return Item{}, fmt.Errorf("outbox: count rows: %w", err)
+	}
+	if rows >= s.maxRows {
+		return Item{}, fmt.Errorf("outbox has %d rows (cap %d): %w", rows, s.maxRows, ErrOutboxFull)
+	}
 
 	seq, err := nextSeqTx(tx, space)
 	if err != nil {

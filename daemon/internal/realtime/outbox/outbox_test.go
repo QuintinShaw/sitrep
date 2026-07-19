@@ -246,3 +246,49 @@ func TestSurvivesRestart(t *testing.T) {
 		t.Fatalf("seq after restart = %d, want 4 (counter must survive restart)", next.DeviceSeq)
 	}
 }
+
+// TestEnqueueFullReturnsErrOutboxFull pins the bounded-outbox policy: at
+// the row cap Enqueue fails with ErrOutboxFull, consumes no device_seq
+// (the transaction rolls back whole), and capacity freed by an ack makes
+// Enqueue work again with the next unconsumed seq.
+func TestEnqueueFullReturnsErrOutboxFull(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	s, err := OpenWithMaxRows(path, 2)
+	if err != nil {
+		t.Fatalf("OpenWithMaxRows: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	for i := int64(1); i <= 2; i++ {
+		if _, err := s.Enqueue(ctx, "space-a", "task.event", bodyFor(i)); err != nil {
+			t.Fatalf("Enqueue %d: %v", i, err)
+		}
+	}
+
+	_, err = s.Enqueue(ctx, "space-a", "task.event", bodyFor(3))
+	if !errors.Is(err, ErrOutboxFull) {
+		t.Fatalf("Enqueue at cap = %v, want ErrOutboxFull", err)
+	}
+
+	// The failed Enqueue must not have consumed a sequence number.
+	next, err := s.NextSeq(ctx, "space-a")
+	if err != nil {
+		t.Fatalf("NextSeq: %v", err)
+	}
+	if next != 3 {
+		t.Fatalf("NextSeq after full = %d, want 3 (rejected Enqueue must not consume a seq)", next)
+	}
+
+	// Freeing one row (an ack arrived) restores capacity.
+	if err := s.Ack(ctx, "space-a", 1); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+	item, err := s.Enqueue(ctx, "space-a", "task.event", bodyFor(3))
+	if err != nil {
+		t.Fatalf("Enqueue after ack freed capacity: %v", err)
+	}
+	if item.DeviceSeq != 3 {
+		t.Fatalf("seq after recovery = %d, want 3", item.DeviceSeq)
+	}
+}

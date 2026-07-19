@@ -1,6 +1,7 @@
 package uplink
 
 import (
+	"context"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -131,5 +132,146 @@ func TestRealtimeFlagOffPreservesExistingBehavior(t *testing.T) {
 	got := httpCap.all()
 	if len(got) != 1 || got[0].Kind != protocol.TaskStart {
 		t.Fatalf("expected exactly one task.start over HTTP, got %+v", got)
+	}
+}
+
+// TestOutboxFullFallsBackToHTTPAndRecovers pins the bounded-outbox policy
+// end to end: when the realtime outbox hits its row cap, further reliable
+// events fall back to the HTTP ingest path (reliability does not degrade,
+// disk usage stays bounded), and once acks drain the backlog the realtime
+// path takes over again.
+func TestOutboxFullFallsBackToHTTPAndRecovers(t *testing.T) {
+	var httpCap capture
+	httpSrv := httptest.NewServer(httpCap.handler(t))
+	defer httpSrv.Close()
+
+	wsMessages := make(chan wire.MessageEventBody, 16)
+	ackRelease := make(chan struct{})
+	rtSrv := rttest.New(func(conn *rttest.Conn) {
+		if _, err := conn.HelloAccept("sess", 1000); err != nil {
+			t.Errorf("HelloAccept: %v", err)
+			return
+		}
+		released := false
+		for {
+			env, err := conn.ReadEnvelope()
+			if err == rttest.ErrPing {
+				conn.WritePong()
+				continue
+			}
+			if err != nil {
+				return
+			}
+			if env.Type != wire.TypeMessageEvent {
+				continue
+			}
+			body, _ := wire.DecodeBody(env)
+			mb := body.(wire.MessageEventBody)
+			select {
+			case wsMessages <- mb:
+			default:
+			}
+			if !released {
+				select {
+				case <-ackRelease:
+					released = true
+				default:
+				}
+			}
+			if released {
+				conn.Ack(mb.DeviceID, mb.DeviceSeq)
+			}
+		}
+	})
+	defer rtSrv.Close()
+
+	// Cap of 1: the first unacked reliable event fills the outbox.
+	store, err := outbox.OpenWithMaxRows(filepath.Join(t.TempDir(), "outbox.db"), 1)
+	if err != nil {
+		t.Fatalf("OpenWithMaxRows: %v", err)
+	}
+	defer store.Close()
+
+	rt := rtclient.New(rtclient.Config{
+		URL:            rtSrv.URL(),
+		DeviceID:       "device-1",
+		Space:          "space-1",
+		Outbox:         store,
+		ResendInterval: 20 * time.Millisecond,
+	})
+	defer rt.Close()
+
+	u := New(Config{ServerURL: httpSrv.URL, FlushInterval: 20 * time.Millisecond, Realtime: rt})
+	defer u.Close()
+
+	msg := func(text string) Event {
+		return ev(protocol.MessageSend, func(e *Event) { e.Text = text; e.Level = "info" })
+	}
+	waitForWS := func(text string) {
+		t.Helper()
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case mb := <-wsMessages:
+				if mb.Text == text {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("realtime server never saw message %q", text)
+			}
+		}
+	}
+
+	// 1. First event: fits in the outbox (row 1/1), goes over WS, unacked.
+	u.Offer(msg("first"))
+	waitForWS("first")
+
+	// 2. Second event: outbox is full -> ErrOutboxFull -> HTTP fallback.
+	u.Offer(msg("second"))
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		found := false
+		for _, e := range httpCap.all() {
+			if e.Kind == protocol.MessageSend && e.Text == "second" {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("HTTP ingest never carried the overflow event while the outbox was full")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// 3. The server starts acking; the resend loop replays "first", it gets
+	// acked, and the outbox drains.
+	close(ackRelease)
+	waitFor := func(cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if cond() {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatal("condition not met within 3s")
+	}
+	waitFor(func() bool {
+		n, err := store.Count(context.Background())
+		return err == nil && n == 0
+	})
+
+	// 4. With capacity restored, the realtime path takes over again.
+	u.Offer(msg("third"))
+	waitForWS("third")
+
+	// "first" and "third" must never have gone over HTTP.
+	for _, e := range httpCap.all() {
+		if e.Kind == protocol.MessageSend && e.Text != "second" {
+			t.Fatalf("HTTP ingest carried %q, which should have traveled the realtime path only", e.Text)
+		}
 	}
 }
