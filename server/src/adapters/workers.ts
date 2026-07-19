@@ -530,6 +530,15 @@ app.get("/v3/realtime", async (c: any) => {
     // role but no device identity; the realtime protocol requires one.
     return c.json({ error: "realtime requires a paired device token" }, 401);
   }
+  // Flag check runs AFTER authenticate() (so an unauthenticated caller still
+  // gets its normal 401, not a 403 that would leak flag state) and BEFORE
+  // the spaceHubStub().fetch() below — a disabled deployment must never wake
+  // a SpaceHub DO. No separate "kill existing connections" path is needed:
+  // flag changes ship via redeploy, which evicts every DO instance and drops
+  // all of its live WebSockets as a side effect.
+  if (!parseRealtimeEnabledFlag(env.REALTIME_ENABLED)) {
+    return c.json({ error: "realtime_disabled" }, 403);
+  }
   const realtimeRole: "source" | "viewer" = role === "source" ? "source" : "viewer";
 
   const headers = new Headers(raw.headers);
@@ -582,7 +591,19 @@ const internalError = (c: any, e: unknown) => {
   return c.json({ error: "internal error" }, 500);
 };
 
+// /v3/automations POST/PATCH/DELETE all end in a stub.mintConfigEvent() /
+// stub.automationsSnapshot() call against the SAME SpaceHub DO that
+// /v3/realtime guards — a half-open control plane (realtime connections
+// blocked but automations still mutating SpaceHub state behind the viewers'
+// backs) is the dual-authority bug this flag exists to prevent, so these
+// routes get the identical 403 gate, checked after authenticate() and before
+// any DO call.
+function realtimeDisabled(c: any): boolean {
+  return !parseRealtimeEnabledFlag((c.env as WorkerEnv).REALTIME_ENABLED);
+}
+
 app.post("/v3/automations", async (c: any) => {
+  if (realtimeDisabled(c)) return c.json({ error: "realtime_disabled" }, 403);
   const role = c.get("role") as Role;
   if (!["admin", "owner"].includes(role)) return c.json({ error: "forbidden" }, 403);
   const body = await c.req.json().catch(() => null);
@@ -623,6 +644,7 @@ app.post("/v3/automations", async (c: any) => {
 });
 
 app.patch("/v3/automations/:id", async (c: any) => {
+  if (realtimeDisabled(c)) return c.json({ error: "realtime_disabled" }, 403);
   const role = c.get("role") as Role;
   if (!["admin", "owner", "viewer"].includes(role)) return c.json({ error: "forbidden" }, 403);
   try {
@@ -647,6 +669,7 @@ app.patch("/v3/automations/:id", async (c: any) => {
 });
 
 app.delete("/v3/automations/:id", async (c: any) => {
+  if (realtimeDisabled(c)) return c.json({ error: "realtime_disabled" }, 403);
   const role = c.get("role") as Role;
   if (!["admin", "owner", "viewer"].includes(role)) return c.json({ error: "forbidden" }, 403);
   try {
