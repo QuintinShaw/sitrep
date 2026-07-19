@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/outbox"
 	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/wire"
 )
 
@@ -28,6 +29,26 @@ var errClientClosing = errors.New("realtime client: closing")
 // reconnect loop must stop instead of hammering the server forever. The
 // process recovers by constructing a new Client (i.e. an explicit restart).
 var errNoRetry = errors.New("realtime client: fatal, not retryable")
+
+// ErrRealtimeDisabled marks a dial rejected with HTTP 403 before the
+// WebSocket upgrade completed: the server's own REALTIME_ENABLED flag is
+// off, so its /v3/realtime endpoint refuses every connection regardless of
+// this device's credentials. This is neither the errNoRetry case (the flag
+// can flip back on at any time, with no software upgrade or credential
+// change required) nor an ordinary transient dial failure (hammering the
+// normal reconnect backoff would be pointless load on a condition that
+// cannot self-heal within seconds) — see run's handling and
+// serverDisabledRecheckInterval.
+var ErrRealtimeDisabled = errors.New("realtime client: server reports realtime disabled (403)")
+
+// serverDisabledRecheckInterval is how long the client waits before
+// re-probing an endpoint that rejected the last dial with
+// ErrRealtimeDisabled. Deliberately long and fixed: this is a server
+// operator's flag, not something expected to flip from moment to moment, so
+// there is no user-facing config for it (see the work order) — only a
+// same-package test seam (Config.testDisabledRecheckInterval) so tests
+// don't have to wait 5 minutes.
+const serverDisabledRecheckInterval = 5 * time.Minute
 
 // ErrInvalidBody wraps a failure from a wire body's Validate(), returned by
 // SendTaskEvent/SendMessageEvent when the caller-supplied fields can never
@@ -69,6 +90,14 @@ type Client struct {
 
 	supersededPenalty atomic.Bool
 
+	// serverDisabled mirrors the outcome of the most recent dial attempt:
+	// true from the moment a dial is rejected with ErrRealtimeDisabled
+	// until the next dial actually completes hello (see connectAndServe),
+	// at which point it is cleared. Uplink polls this (ServerDisabled) to
+	// decide whether to switch its whole session to legacy /v2 routing —
+	// see internal/uplink.Uplink.pollRealtimeMode's truth table.
+	serverDisabled atomic.Bool
+
 	closing chan struct{}
 	closed  chan struct{}
 	once    sync.Once
@@ -101,6 +130,24 @@ func (c *Client) Connected() bool {
 	defer c.mu.Unlock()
 	return c.connected
 }
+
+// ServerDisabled reports whether the most recent dial attempt was rejected
+// with ErrRealtimeDisabled (server-side REALTIME_ENABLED off) and no dial
+// has completed hello since. See Config's package doc and
+// internal/uplink.Uplink.pollRealtimeMode for what the caller does with
+// this.
+func (c *Client) ServerDisabled() bool { return c.serverDisabled.Load() }
+
+// Outbox exposes the durable store backing this client, for a caller that
+// needs to drain it through a path other than this client's own realtime
+// delivery — specifically internal/uplink's legacy-mode fallback, which
+// walks Outbox/Overflow directly once ServerDisabled reports the server has
+// rejected realtime for this session.
+func (c *Client) Outbox() *outbox.Store { return c.cfg.Outbox }
+
+// Space reports the (device, space) scope this client's outbox and
+// device_seq counter are bound to (SPEC.md section 5.1) — see Outbox.
+func (c *Client) Space() string { return c.cfg.Space }
 
 // MetricsThrottled reports whether the metric batcher is currently in its
 // throttled cadence (SPEC.md section 7's command{throttle}/{resume_rate}).
@@ -252,6 +299,28 @@ func (c *Client) run() {
 			c.cfg.Logf("realtime: giving up, not retryable: %v", err)
 			return
 		}
+		if errors.Is(err, ErrRealtimeDisabled) {
+			// The server itself has realtime turned off. This is not a
+			// transient dial failure (the normal exponential backoff below
+			// would hammer it every ~60s for no reason: an operator flag
+			// does not flip back on within seconds) and not the
+			// give-up-forever case either (it CAN flip back on at any time,
+			// with no software upgrade or new credential needed) — so wait
+			// a long, fixed interval and try again, without touching the
+			// normal reconnect attempt counter at all.
+			c.serverDisabled.Store(true)
+			interval := serverDisabledRecheckInterval
+			if c.cfg.testDisabledRecheckInterval > 0 {
+				interval = c.cfg.testDisabledRecheckInterval
+			}
+			c.cfg.Logf("realtime: server reports realtime disabled; re-checking in %v", interval)
+			select {
+			case <-time.After(interval):
+			case <-c.closing:
+				return
+			}
+			continue
+		}
 		c.cfg.Logf("realtime: connection ended: %v", err)
 
 		c.mu.Lock()
@@ -284,9 +353,21 @@ func (c *Client) connectAndServe() error {
 	if c.cfg.Token != "" {
 		header.Set("Authorization", "Bearer "+c.cfg.Token)
 	}
-	conn, _, err := websocket.Dial(dialCtx, c.cfg.URL, &websocket.DialOptions{HTTPHeader: header})
+	conn, resp, err := websocket.Dial(dialCtx, c.cfg.URL, &websocket.DialOptions{HTTPHeader: header})
 	dialCancel()
 	if err != nil {
+		// A rejection before the WebSocket upgrade completes surfaces here
+		// as a non-nil err with resp still populated (coder/websocket keeps
+		// the response, with a small snippet of its body, specifically for
+		// this kind of diagnosis). Status 403 on this endpoint is
+		// sufficient signal on its own that the server's REALTIME_ENABLED
+		// is off — SERVER-side authority has moved to UserStore for this
+		// session, exactly like the local SITREP_REALTIME flag off has
+		// always meant "legacy only" on this side; see ErrRealtimeDisabled
+		// and internal/uplink.Uplink.pollRealtimeMode for what happens next.
+		if resp != nil && resp.StatusCode == http.StatusForbidden {
+			return fmt.Errorf("dial: %w", ErrRealtimeDisabled)
+		}
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.CloseNow()
@@ -299,6 +380,12 @@ func (c *Client) connectAndServe() error {
 		return fmt.Errorf("hello accept: %w", err)
 	}
 	heartbeatInterval := time.Duration(accept.HeartbeatIntervalMS) * time.Millisecond
+
+	// A completed hello is proof the server currently accepts realtime,
+	// whether or not this connection had ever previously been rejected with
+	// ErrRealtimeDisabled — clear it so pollRealtimeMode's caller resumes
+	// realtime routing for new events immediately.
+	c.serverDisabled.Store(false)
 
 	c.mu.Lock()
 	c.conn = conn
@@ -573,6 +660,12 @@ func (c *Client) handleFrame(ctx context.Context, conn *websocket.Conn, env wire
 				c.cfg.Logf("realtime: ack seq %d: %v", p.DeviceSeq, err)
 			}
 		}
+		// An ack frees outbox capacity, and Outbox.Ack itself promotes at
+		// most one waiting overflow row into that freed slot per call (see
+		// its doc comment). Wake the sender so a freshly-promoted row (now
+		// bearing a real device_seq) is written to this connection promptly
+		// via replayPending, rather than waiting for the next resend tick.
+		c.wakeSender()
 		return nil
 	case wire.TypeCommand:
 		cb := body.(wire.CommandBody)

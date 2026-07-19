@@ -106,6 +106,24 @@ type Config struct {
 
 	OnCommand func(CommandAction)
 	Logf      Logf
+
+	// testDisabledRecheckInterval overrides serverDisabledRecheckInterval.
+	// Unexported: there is no public config surface for this (per the work
+	// order's "no config needed" — a server operator's flag is not
+	// something a user should be tuning). Set only via
+	// WithTestDisabledRecheckInterval, and only from tests.
+	testDisabledRecheckInterval time.Duration
+}
+
+// WithTestDisabledRecheckInterval returns a copy of cfg with the periodic
+// re-probe interval (serverDisabledRecheckInterval, normally ~5 minutes)
+// shortened. This is a test-only seam for integration tests in sibling
+// internal packages (e.g. internal/uplink) that need to observe a
+// server-disabled -> re-enabled transition without waiting 5 real minutes;
+// production code must never call this.
+func WithTestDisabledRecheckInterval(cfg Config, d time.Duration) Config {
+	cfg.testDisabledRecheckInterval = d
+	return cfg
 }
 
 func (c *Config) applyDefaults() {
