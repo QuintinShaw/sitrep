@@ -200,3 +200,28 @@ func TestUnixMSBoundary(t *testing.T) {
 		}
 	}
 }
+
+// TestMetricIDValidation pins the metric_id grammar from
+// common.schema.json#/$defs/metric_id (^[a-z0-9_.-]{1,64}$).
+func TestMetricIDValidation(t *testing.T) {
+	valid := []string{"cpu.load", "mem.used_gb", "a", "x_1-2.3"}
+	for _, id := range valid {
+		s := MetricSample{MetricID: id, Value: "1", TS: MinUnixMS + 1}
+		if err := s.Validate(); err != nil {
+			t.Errorf("Validate(%q) = %v, want nil", id, err)
+		}
+	}
+	invalid := []string{
+		"",                       // empty
+		"CPU.Load",               // uppercase
+		"has space",              // whitespace
+		"emojié",                 // non-ascii
+		string(make([]byte, 65)), // over 64 chars (and NUL bytes)
+	}
+	for _, id := range invalid {
+		s := MetricSample{MetricID: id, Value: "1", TS: MinUnixMS + 1}
+		if err := s.Validate(); err == nil {
+			t.Errorf("Validate(%q) = nil, want error", id)
+		}
+	}
+}

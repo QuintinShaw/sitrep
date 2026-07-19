@@ -3,7 +3,13 @@ package wire
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 )
+
+// metricIDPattern mirrors common.schema.json#/$defs/metric_id: the id
+// grammar from proto/SPEC.md's metric.update verb, non-empty by
+// construction ({1,64}).
+var metricIDPattern = regexp.MustCompile(`^[a-z0-9_.-]{1,64}$`)
 
 // Field length caps from common.schema.json.
 const (
@@ -217,6 +223,9 @@ func (t TaskState) Validate() error {
 }
 
 func (m MetricSample) Validate() error {
+	if !metricIDPattern.MatchString(m.MetricID) {
+		return fmt.Errorf("metric_sample: metric_id %q does not match %s", m.MetricID, metricIDPattern)
+	}
 	if len(m.Value) > metricValueMax {
 		return fmt.Errorf("metric_sample: value exceeds %d chars", metricValueMax)
 	}
