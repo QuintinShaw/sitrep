@@ -247,11 +247,13 @@ func TestSurvivesRestart(t *testing.T) {
 	}
 }
 
-// TestEnqueueFullReturnsErrOutboxFull pins the bounded-outbox policy: at
-// the row cap Enqueue fails with ErrOutboxFull, consumes no device_seq
-// (the transaction rolls back whole), and capacity freed by an ack makes
-// Enqueue work again with the next unconsumed seq.
-func TestEnqueueFullReturnsErrOutboxFull(t *testing.T) {
+// TestEnqueueFullOverflows pins the bounded-outbox policy: at the row cap,
+// Enqueue does not fail — it durably persists the event into
+// outbox_overflow and returns ErrOverflowed, consuming no device_seq (no
+// seq is ever allocated for an overflowed event until it is promoted). An
+// ack freeing outbox capacity then promotes the overflowed event,
+// allocating it the next unconsumed seq at that moment.
+func TestEnqueueFullOverflows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.db")
 	s, err := OpenWithMaxRows(path, 2)
 	if err != nil {
@@ -267,28 +269,215 @@ func TestEnqueueFullReturnsErrOutboxFull(t *testing.T) {
 	}
 
 	_, err = s.Enqueue(ctx, "space-a", "task.event", bodyFor(3))
-	if !errors.Is(err, ErrOutboxFull) {
-		t.Fatalf("Enqueue at cap = %v, want ErrOutboxFull", err)
+	if !errors.Is(err, ErrOverflowed) {
+		t.Fatalf("Enqueue at cap = %v, want ErrOverflowed", err)
 	}
 
-	// The failed Enqueue must not have consumed a sequence number.
+	// The overflowed Enqueue must not have consumed a sequence number: no
+	// seq is allocated until promotion.
 	next, err := s.NextSeq(ctx, "space-a")
 	if err != nil {
 		t.Fatalf("NextSeq: %v", err)
 	}
 	if next != 3 {
-		t.Fatalf("NextSeq after full = %d, want 3 (rejected Enqueue must not consume a seq)", next)
+		t.Fatalf("NextSeq after overflow = %d, want 3 (an overflowed Enqueue must not consume a seq)", next)
+	}
+	overflowCount, err := s.OverflowCount(ctx)
+	if err != nil {
+		t.Fatalf("OverflowCount: %v", err)
+	}
+	if overflowCount != 1 {
+		t.Fatalf("OverflowCount = %d, want 1", overflowCount)
 	}
 
-	// Freeing one row (an ack arrived) restores capacity.
+	// Freeing one row (an ack arrived) promotes the overflowed event,
+	// allocating it the next unconsumed seq.
 	if err := s.Ack(ctx, "space-a", 1); err != nil {
 		t.Fatalf("Ack: %v", err)
 	}
-	item, err := s.Enqueue(ctx, "space-a", "task.event", bodyFor(3))
+	pending, err := s.Pending(ctx, "space-a")
 	if err != nil {
-		t.Fatalf("Enqueue after ack freed capacity: %v", err)
+		t.Fatalf("Pending: %v", err)
 	}
-	if item.DeviceSeq != 3 {
-		t.Fatalf("seq after recovery = %d, want 3", item.DeviceSeq)
+	if len(pending) != 2 {
+		t.Fatalf("Pending after ack+promotion = %d items, want 2 (seq 2 and the promoted seq 3): %v", len(pending), pending)
+	}
+	if pending[len(pending)-1].DeviceSeq != 3 {
+		t.Fatalf("promoted item's seq = %d, want 3", pending[len(pending)-1].DeviceSeq)
+	}
+	overflowCount, err = s.OverflowCount(ctx)
+	if err != nil {
+		t.Fatalf("OverflowCount after promotion: %v", err)
+	}
+	if overflowCount != 0 {
+		t.Fatalf("OverflowCount after promotion = %d, want 0", overflowCount)
+	}
+}
+
+// TestEnqueueRoutesToOverflowWhileOlderOverflowPending is the DB-layer
+// regression test for the round-1 seq-order-inversion race, reproduced at
+// the store instead of the uplink: a fresh Enqueue must never claim a seq
+// via a just-freed outbox row while an older event for the same space is
+// still waiting in overflow — even when the outbox itself currently has
+// room. The check must live inside Enqueue's own transaction (not depend on
+// a caller doing the right thing), so this test frees a row by a route
+// other than Ack/PromoteOverflow (a direct delete) to isolate that
+// invariant from Ack's own promotion behavior.
+func TestEnqueueRoutesToOverflowWhileOlderOverflowPending(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	s, err := OpenWithMaxRows(path, 2)
+	if err != nil {
+		t.Fatalf("OpenWithMaxRows: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		if _, err := s.Enqueue(ctx, "space-a", "task.event", bodyFor(0)); err != nil {
+			t.Fatalf("fill Enqueue %d: %v", i, err)
+		}
+	}
+	// A overflows: the outbox is full.
+	_, err = s.Enqueue(ctx, "space-a", "task.event", bodyFor(0))
+	if !errors.Is(err, ErrOverflowed) {
+		t.Fatalf("A's Enqueue at cap = %v, want ErrOverflowed", err)
+	}
+
+	// Free BOTH filler rows (enough room for both A and B to eventually
+	// promote) WITHOUT going through Ack, so no promotion runs yet —
+	// simulates "capacity freed" independent of this store's own
+	// ack-triggers-promotion wiring, isolating the Enqueue-side guard.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM outbox WHERE space = ?`, "space-a"); err != nil {
+		t.Fatalf("simulate freed rows: %v", err)
+	}
+
+	// B is offered now: the outbox is completely empty (full room), but A
+	// is still waiting in overflow. B must join it there — claiming a row
+	// directly would hand B a lower seq than A gets once A is finally
+	// promoted, inverting wire order.
+	_, err = s.Enqueue(ctx, "space-a", "task.event", bodyFor(0))
+	if !errors.Is(err, ErrOverflowed) {
+		t.Fatalf("B's Enqueue while outbox has room but overflow is non-empty = %v, want ErrOverflowed", err)
+	}
+
+	if _, err := s.PromoteOverflow(ctx, 2); err != nil {
+		t.Fatalf("PromoteOverflow: %v", err)
+	}
+	pending, err := s.Pending(ctx, "space-a")
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	// A and B, promoted in FIFO order.
+	if len(pending) != 2 {
+		t.Fatalf("Pending after promotion = %d items, want 2: %v", len(pending), pending)
+	}
+	seqA, seqB := pending[0].DeviceSeq, pending[1].DeviceSeq
+	if !(seqA < seqB) {
+		t.Fatalf("wire order inverted: expected A's seq < B's seq (A overflowed first), got A=%d B=%d", seqA, seqB)
+	}
+}
+
+// TestOverflowPromotesOnOpenWhenCapacityFree pins the second required
+// promotion trigger (the first is Ack, above): a fresh Store.Open must
+// itself notice a waiting overflow row that has room to be promoted into
+// and do so immediately, rather than waiting for the next ack — otherwise a
+// daemon that restarts with an already-drained outbox would leave a
+// perfectly promotable event stranded until unrelated future traffic
+// happened to trigger an ack.
+func TestOverflowPromotesOnOpenWhenCapacityFree(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	s1, err := OpenWithMaxRows(path, 1)
+	if err != nil {
+		t.Fatalf("OpenWithMaxRows: %v", err)
+	}
+	ctx := context.Background()
+
+	filler, err := s1.Enqueue(ctx, "space-a", "task.event", bodyFor(0))
+	if err != nil {
+		t.Fatalf("filler Enqueue: %v", err)
+	}
+	_, err = s1.Enqueue(ctx, "space-a", "task.event", bodyFor(0))
+	if !errors.Is(err, ErrOverflowed) {
+		t.Fatalf("overflow Enqueue = %v, want ErrOverflowed", err)
+	}
+
+	// Free the filler's row without running this store's own
+	// promote-on-ack wiring, so the only remaining trigger that could
+	// notice the freed capacity is the next Open.
+	if _, err := s1.db.ExecContext(ctx, `DELETE FROM outbox WHERE space = ? AND device_seq = ?`, "space-a", filler.DeviceSeq); err != nil {
+		t.Fatalf("simulate freed row: %v", err)
+	}
+	if err := s1.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	s2, err := OpenWithMaxRows(path, 1)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+
+	pending, err := s2.Pending(ctx, "space-a")
+	if err != nil {
+		t.Fatalf("Pending after reopen: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("expected Open to promote the waiting overflow row into freed capacity, got %d pending: %v", len(pending), pending)
+	}
+	if n, err := s2.OverflowCount(ctx); err != nil || n != 0 {
+		t.Fatalf("OverflowCount after reopen-promotion = %d, %v, want 0", n, err)
+	}
+}
+
+// TestOverflowSurvivesCloseAndReopen is the outbox-layer half of the
+// reviewer's exact scenario (the uplink/client-level version lives in
+// internal/uplink): an overflowed event, and the outbox rows that keep it
+// overflowed, must both survive a process restart (Close + reopen the same
+// database file) unchanged, and only promote once an ack actually frees
+// capacity on the reopened store.
+func TestOverflowSurvivesCloseAndReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	s1, err := OpenWithMaxRows(path, 1)
+	if err != nil {
+		t.Fatalf("OpenWithMaxRows: %v", err)
+	}
+	ctx := context.Background()
+
+	filler, err := s1.Enqueue(ctx, "space-a", "task.event", bodyFor(0))
+	if err != nil {
+		t.Fatalf("filler Enqueue: %v", err)
+	}
+	_, err = s1.Enqueue(ctx, "space-a", "task.event", bodyFor(0))
+	if !errors.Is(err, ErrOverflowed) {
+		t.Fatalf("overflow Enqueue = %v, want ErrOverflowed", err)
+	}
+	if err := s1.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	s2, err := OpenWithMaxRows(path, 1)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+
+	// Nothing to promote yet: the outbox is still full (the filler is
+	// still unacked), so Open's promotion attempt is a no-op.
+	if n, err := s2.OverflowCount(ctx); err != nil || n != 1 {
+		t.Fatalf("OverflowCount after reopen = %d, %v, want 1 (outbox still full, nothing promotable)", n, err)
+	}
+
+	if err := s2.Ack(ctx, "space-a", filler.DeviceSeq); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+	pending, err := s2.Pending(ctx, "space-a")
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("Pending after ack+promotion = %d items, want 1: %v", len(pending), pending)
+	}
+	if n, err := s2.OverflowCount(ctx); err != nil || n != 0 {
+		t.Fatalf("OverflowCount after ack+promotion = %d, %v, want 0", n, err)
 	}
 }
