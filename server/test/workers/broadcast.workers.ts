@@ -79,6 +79,57 @@ describe("metric.frame", () => {
     v1.close();
     v2.close();
   });
+
+  it("staleness baseline is space-level: an older ts from a second source connection is dropped", async () => {
+    const { source, viewer, inviteAndJoin } = await bootstrapSpace();
+    const source2 = await inviteAndJoin("source");
+
+    const viewerClient = await connect(viewer.token);
+    await helloOffer(viewerClient, viewer.device_id, "viewer");
+    await subscribe(viewerClient, ["metric"]);
+    await resume(viewerClient, 0);
+
+    const s1 = await connect(source.token);
+    await helloSource(s1, source.device_id);
+    const s2 = await connect(source2.token);
+    await helloSource(s2, source2.device_id);
+
+    const t = Date.now();
+    // Source 1 reports cpu.load at t+1000.
+    s1.send({
+      type: "metric.frame",
+      id: nextId(),
+      ts: Date.now(),
+      body: { device_id: source.device_id, metrics: [{ metric_id: "cpu.load", value: "80", ts: t + 1000 }] },
+    });
+    const f1 = await viewerClient.recv();
+    expect(f1.body.metrics[0].value).toBe("80");
+
+    // Source 2 (different device, different connection) reports the SAME
+    // metric_id with an OLDER ts — SPEC.md section 12's discard rule must
+    // apply across connections/devices, so the viewer sees nothing.
+    s2.send({
+      type: "metric.frame",
+      id: nextId(),
+      ts: Date.now(),
+      body: { device_id: source2.device_id, metrics: [{ metric_id: "cpu.load", value: "10", ts: t + 500 }] },
+    });
+    await viewerClient.expectSilence(200);
+
+    // A genuinely fresher sample from source 2 goes through.
+    s2.send({
+      type: "metric.frame",
+      id: nextId(),
+      ts: Date.now(),
+      body: { device_id: source2.device_id, metrics: [{ metric_id: "cpu.load", value: "55", ts: t + 2000 }] },
+    });
+    const f2 = await viewerClient.recv();
+    expect(f2.body.metrics[0].value).toBe("55");
+
+    s1.close();
+    s2.close();
+    viewerClient.close();
+  });
 });
 
 describe("chunked snapshot", () => {

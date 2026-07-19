@@ -68,7 +68,6 @@ import type {
 
 interface RateLimiterState {
   frameTimestamps: number[];
-  perMetricLastTs: Map<string, number>;
 }
 
 export class SpaceHub extends DurableObject<Env> {
@@ -708,9 +707,15 @@ export class SpaceHub extends DurableObject<Env> {
 
     const accepted: MetricSample[] = [];
     for (const sample of body.metrics) {
-      const lastTs = limiter.perMetricLastTs.get(sample.metric_id) ?? 0;
-      if (sample.ts <= lastTs) continue; // SPEC.md section 12: discard stale/duplicate
-      limiter.perMetricLastTs.set(sample.metric_id, sample.ts);
+      // SPEC.md section 12: discard any sample whose ts <= the last-applied
+      // ts for that metric_id. The baseline is SPACE-level (metricsCache,
+      // keyed by metric_id alone), NOT per connection: staleness must be
+      // judged across connections and across devices, or a reconnecting or
+      // second source could replay an older sample past a fresher one.
+      // Same lifetime as the rest of metricsCache — reset after eviction
+      // is acceptable (the whole cache is best-effort, section 6.2).
+      const cached = this.metricsCache.get(sample.metric_id);
+      if (cached && sample.ts <= cached.ts) continue;
       this.metricsCache.set(sample.metric_id, sample);
       accepted.push(sample);
     }
@@ -733,7 +738,7 @@ export class SpaceHub extends DurableObject<Env> {
   private rateLimiterFor(ws: WebSocket): RateLimiterState {
     let state = this.rateLimiters.get(ws);
     if (!state) {
-      state = { frameTimestamps: [], perMetricLastTs: new Map() };
+      state = { frameTimestamps: [] };
       this.rateLimiters.set(ws, state);
     }
     return state;
