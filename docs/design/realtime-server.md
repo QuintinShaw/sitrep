@@ -99,6 +99,57 @@ counts against the attached SQLite database).
   today they only grow, which is an accepted, called-out gap (see the
   handoff's "known gaps" section).
 
+## Observability config
+
+`wrangler.jsonc`'s `observability` block is the other half of the cost
+model above — `logSampler`'s ≤1% in-code sampling only bounds what
+SpaceHub *chooses* to write to `console.log` (`logHotPath`); it does
+nothing about the Workers platform's own per-invocation telemetry, which
+fires once per `webSocketMessage` call regardless of what the handler logs.
+Final configuration:
+
+```jsonc
+"observability": {
+  "enabled": true,
+  "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": false },
+  "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+}
+```
+
+- **`logs.head_sampling_rate: 1` (i.e. no head sampling on structured
+  logs).** This is the deliberate choice, not an oversight: `logAlways()`
+  (superseded connections, protocol errors, unhandled exceptions — the
+  security/error tier) is a correctness requirement that must reach 100%
+  of the time, and Workers Logs head sampling is applied indiscriminately
+  before the Worker code runs, so any rate below 1.0 here would silently
+  drop `logAlways` events alongside the hot-path ones. Volume is bounded
+  instead at the *source*, in-code, by `logSampler` (`≤1%` of
+  `logHotPath` calls) — a rate this repository controls and tests directly
+  (`space-hub.ts`'s injectable `logSampler`), rather than a platform knob
+  that can't distinguish log tiers.
+- **`logs.invocation_logs: false`.** This is what actually bounds request
+  volume: Workers' automatic invocation log is emitted once per request
+  (once per WebSocket message callback here) independent of anything the
+  Worker code logs, and cannot be tier-aware the way `logSampler` is.
+  Disabling it removes the one telemetry source neither `logAlways` nor
+  `logSampler` was ever designed to control.
+- **`traces.head_sampling_rate: 0.01`.** Traces have no `logAlways`
+  equivalent (nothing security-relevant depends on a trace existing), so
+  they're sampled at the platform level like any other diagnostic-only
+  signal.
+
+Revised cost estimate: per-space WebSocket message volume is bounded by
+the protocol itself (10 `metric.frame`/s per connection, SPEC.md section
+11, plus whatever rate reliable events arrive at) — call it on the order
+of a few thousand `webSocketMessage` invocations/day for an actively-used
+space. With `invocation_logs: false`, none of those turn into a platform
+invocation-log write; with `logSampler` at ≤1%, `logHotPath` contributes
+at most ~1 structured log line per 100 frames; `logAlways` contributes a
+handful of lines per space (supersession, occasional protocol errors) —
+negligible even at 100% sampling. Net: structured log volume scales with
+*intentional* logging, not raw message count, which is what makes the
+`head_sampling_rate: 1` choice on `logs` affordable.
+
 ## Hibernation
 
 SpaceHub is written so that an idle connection costs nothing beyond the
