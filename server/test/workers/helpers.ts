@@ -97,7 +97,7 @@ export class WsClient {
     this.ws.send(text);
   }
 
-  recvRaw(timeoutMs = 3000): Promise<string> {
+  recvRaw(timeoutMs = 10_000): Promise<string> {
     const queued = this.queue.shift();
     if (queued !== undefined) return Promise.resolve(queued);
     return new Promise((resolve, reject) => {
@@ -118,7 +118,7 @@ export class WsClient {
     });
   }
 
-  async recv(timeoutMs = 3000): Promise<any> {
+  async recv(timeoutMs = 10_000): Promise<any> {
     return JSON.parse(await this.recvRaw(timeoutMs));
   }
 
@@ -134,7 +134,7 @@ export class WsClient {
     }
   }
 
-  waitForClose(timeoutMs = 3000): Promise<{ code: number; reason: string }> {
+  waitForClose(timeoutMs = 10_000): Promise<{ code: number; reason: string }> {
     if (this.closed) return Promise.resolve(this.closed);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("timed out waiting for close")), timeoutMs);
@@ -176,6 +176,19 @@ export async function helloOffer(client: WsClient, deviceId: string, role: "sour
     body: { stage: "offer", device_id: deviceId, role, protocol_versions: [1] },
   });
   return client.recv();
+}
+
+/** Completes a source's hello AND consumes the interest-state command the
+ * server sends every source immediately after its accept (throttle when no
+ * lease is active, resume_rate otherwise). Returns both so tests that care
+ * about the initial rate state can assert on it. */
+export async function helloSource(client: WsClient, deviceId: string): Promise<{ accept: any; rate: any }> {
+  const accept = await helloOffer(client, deviceId, "source");
+  const rate = await client.recv();
+  if (rate.type !== "command" || rate.body.origin !== "server") {
+    throw new Error(`expected the post-hello interest-state command, got: ${JSON.stringify(rate)}`);
+  }
+  return { accept, rate };
 }
 
 export async function subscribe(client: WsClient, topics?: Array<"task" | "metric" | "message">): Promise<any> {

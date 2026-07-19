@@ -1,6 +1,6 @@
 // Required coverage #8 (connection gating), #9 (supersede).
 import { describe, expect, it } from "vitest";
-import { bootstrapSpace, connect, helloOffer, nextId, resume, subscribe } from "./helpers";
+import { bootstrapSpace, connect, helloOffer, helloSource, nextId, resume, subscribe } from "./helpers";
 
 describe("connection gating", () => {
   it("any frame before hello offer gets hello_required and the connection closes", async () => {
@@ -31,7 +31,7 @@ describe("connection gating", () => {
   it("no live delta reaches a connection before its own resume reply", async () => {
     const { source, viewer } = await bootstrapSpace();
     const sourceClient = await connect(source.token);
-    await helloOffer(sourceClient, source.device_id, "source");
+    await helloSource(sourceClient, source.device_id);
 
     const viewerClient = await connect(viewer.token);
     await helloOffer(viewerClient, viewer.device_id, "viewer");
@@ -65,7 +65,7 @@ describe("connection gating", () => {
     const { source, viewer } = await bootstrapSpace();
 
     const first = await connect(source.token);
-    await helloOffer(first, source.device_id, "source");
+    await helloSource(first, source.device_id);
 
     // An unrelated viewer subscribes throughout — if supersession ever
     // spuriously toggled the lease count, this connection would see a
@@ -80,7 +80,7 @@ describe("connection gating", () => {
     expect(resumeRate.body.action).toBe("resume_rate");
 
     const second = await connect(source.token);
-    await helloOffer(second, source.device_id, "source");
+    await helloSource(second, source.device_id);
 
     const supersededErr = await first.recv();
     expect(supersededErr.type).toBe("error");

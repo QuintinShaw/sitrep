@@ -417,7 +417,19 @@ export class SpaceHub extends DurableObject<Env> {
       heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
     });
 
-    if (att.role === "source") this.drainPendingCommands(ws, att.deviceId);
+    if (att.role === "source") {
+      // Interest-state sync on (re)connect. SPEC.md section 7's throttle/
+      // resume_rate are pure edge triggers, so a source that was offline
+      // when the space's lease count crossed an edge would otherwise stay
+      // stuck at its last-known rate forever (e.g. throttled while viewers
+      // are actively watching). Immediately after the accept, tell this
+      // connection the CURRENT interest state. This adds no new message
+      // type or schema change — it reuses command{origin:server} with a
+      // fresh command_id — and is a v1.1 protocol clarification candidate
+      // (ruled by the protocol owner; see the handoff notes).
+      this.sendCurrentRateState(ws);
+      this.drainPendingCommands(ws, att.deviceId);
+    }
     this.reconcileLeaseEdge();
   }
 
@@ -802,6 +814,23 @@ export class SpaceHub extends DurableObject<Env> {
       if (!isConnAttachment(att) || att.role !== "source" || !att.helloDone) continue;
       this.send(ws, "command", body);
     }
+  }
+
+  /** Unicast the space's CURRENT interest state to one freshly-connected
+   * source (see the call site in handlePreHello for why edges alone are
+   * not enough). Counts only unexpired leases, same rule as
+   * reconcileLeaseEdge. */
+  private sendCurrentRateState(ws: WebSocket): void {
+    const active = this.ctx.storage.sql
+      .exec<{ n: number }>("SELECT COUNT(*) as n FROM leases WHERE expires_at > ?", Date.now())
+      .toArray()[0].n;
+    const body: CommandBody = {
+      command_id: crypto.randomUUID(),
+      origin: "server",
+      action: active > 0 ? "resume_rate" : "throttle",
+      ttl_ms: 60_000,
+    };
+    this.send(ws, "command", body);
   }
 
   // ---- command relay (viewer-issued pause/resume/stop/run_now) ----

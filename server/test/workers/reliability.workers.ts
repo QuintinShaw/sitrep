@@ -4,13 +4,13 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { SpaceHub } from "../../src/realtime/space-hub.ts";
-import { bootstrapSpace, connect, helloOffer, nextId, resume, sendTaskEvent, subscribe } from "./helpers";
+import { bootstrapSpace, connect, helloOffer, helloSource, nextId, resume, sendTaskEvent, subscribe } from "./helpers";
 
 describe("reliable event dedup and revision accounting", () => {
   it("a duplicate device_seq re-acks without applying twice or bumping revision again", async () => {
     const { source, viewer } = await bootstrapSpace();
     const sourceClient = await connect(source.token);
-    await helloOffer(sourceClient, source.device_id, "source");
+    await helloSource(sourceClient, source.device_id);
 
     const viewerClient = await connect(viewer.token);
     await helloOffer(viewerClient, viewer.device_id, "viewer");
@@ -56,7 +56,7 @@ describe("reliable event dedup and revision accounting", () => {
   it("event_id in push_outbox is idempotent across a duplicate device_seq retry", async () => {
     const { spaceId, source } = await bootstrapSpace();
     const sourceClient = await connect(source.token);
-    await helloOffer(sourceClient, source.device_id, "source");
+    await helloSource(sourceClient, source.device_id);
     await sendTaskEvent(sourceClient, source.device_id, 1);
     await sendTaskEvent(sourceClient, source.device_id, 1); // duplicate
     sourceClient.close();
@@ -90,7 +90,7 @@ describe("resume decision table", () => {
   it("last_revision == current revision yields the explicit empty delta", async () => {
     const { source, viewer } = await bootstrapSpace();
     const sourceClient = await connect(source.token);
-    await helloOffer(sourceClient, source.device_id, "source");
+    await helloSource(sourceClient, source.device_id);
     await sendTaskEvent(sourceClient, source.device_id, 1);
 
     const client = await connect(viewer.token);
@@ -120,7 +120,7 @@ describe("resume decision table", () => {
   it("0 < last_revision < current, fully retained, yields a catch-up delta (not a snapshot)", async () => {
     const { source, viewer } = await bootstrapSpace();
     const sourceClient = await connect(source.token);
-    await helloOffer(sourceClient, source.device_id, "source");
+    await helloSource(sourceClient, source.device_id);
     await sendTaskEvent(sourceClient, source.device_id, 1, { kind: "started" });
     await sendTaskEvent(sourceClient, source.device_id, 2, { kind: "progress", percent: 50 });
     await sendTaskEvent(sourceClient, source.device_id, 3, { kind: "done" });
@@ -140,7 +140,7 @@ describe("resume decision table", () => {
   it("a range whose retention was lost falls back to a snapshot instead of an error", async () => {
     const { spaceId, source, viewer } = await bootstrapSpace();
     const sourceClient = await connect(source.token);
-    await helloOffer(sourceClient, source.device_id, "source");
+    await helloSource(sourceClient, source.device_id);
     await sendTaskEvent(sourceClient, source.device_id, 1);
     await sendTaskEvent(sourceClient, source.device_id, 2);
     await sendTaskEvent(sourceClient, source.device_id, 3);
@@ -177,7 +177,7 @@ describe("connection identity recovery", () => {
   it("a fresh connection for the same device, and a fresh stub reference, both observe identical durable state", async () => {
     const { spaceId, source } = await bootstrapSpace();
     const first = await connect(source.token);
-    await helloOffer(first, source.device_id, "source");
+    await helloSource(first, source.device_id);
     await sendTaskEvent(first, source.device_id, 1, { kind: "started", title: "build" });
     first.close();
 
@@ -186,7 +186,7 @@ describe("connection identity recovery", () => {
     // device's device_seq sequence — proving identity isn't cached
     // anywhere but the attachment + storage.
     const second = await connect(source.token);
-    const accept = await helloOffer(second, source.device_id, "source");
+    const { accept } = await helloSource(second, source.device_id);
     expect(accept.body.stage).toBe("accept");
     await sendTaskEvent(second, source.device_id, 2, { kind: "done" });
     second.close();

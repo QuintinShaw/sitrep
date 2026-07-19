@@ -5,7 +5,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { SpaceHub } from "../../src/realtime/space-hub.ts";
-import { bootstrapSpace, connect, helloOffer, nextId, resume, sendTaskEvent, subscribe } from "./helpers";
+import { bootstrapSpace, connect, helloOffer, helloSource, nextId, resume, sendTaskEvent, subscribe } from "./helpers";
 
 function tableCounts(state: any) {
   const tables = ["event_log", "dedup", "tasks", "messages", "automations", "leases", "push_outbox", "space_meta"];
@@ -20,7 +20,7 @@ describe("metric.frame", () => {
   it("never writes SQLite and never advances space_revision", async () => {
     const { spaceId, source, viewer } = await bootstrapSpace();
     const sourceClient = await connect(source.token);
-    await helloOffer(sourceClient, source.device_id, "source");
+    await helloSource(sourceClient, source.device_id);
 
     const viewerClient = await connect(viewer.token);
     await helloOffer(viewerClient, viewer.device_id, "viewer");
@@ -52,7 +52,7 @@ describe("metric.frame", () => {
     const viewer2 = await inviteAndJoin("viewer");
 
     const sourceClient = await connect(source.token);
-    await helloOffer(sourceClient, source.device_id, "source");
+    await helloSource(sourceClient, source.device_id);
 
     const v1 = await connect(viewer.token);
     await helloOffer(v1, viewer.device_id, "viewer");
@@ -115,7 +115,7 @@ describe("chunked snapshot", () => {
     });
 
     const sourceClient = await connect(source.token);
-    await helloOffer(sourceClient, source.device_id, "source");
+    await helloSource(sourceClient, source.device_id);
 
     const viewerClient = await connect(viewer.token);
     await helloOffer(viewerClient, viewer.device_id, "viewer");
