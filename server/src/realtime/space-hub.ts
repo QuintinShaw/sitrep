@@ -28,6 +28,7 @@ import {
   ERROR_SEMANTICS,
   HEARTBEAT_INTERVAL_MS,
   LEASE_DEFAULT_MS,
+  METRIC_CACHE_MAX_METRICS,
   METRIC_FRAME_RATE_PER_SEC,
   EVENT_LOG_RETENTION_REVISIONS,
   MESSAGE_WINDOW,
@@ -93,7 +94,13 @@ export class SpaceHub extends DurableObject<Env> {
 
   /** Best-effort metric cache (SPEC.md section 6.2: snapshot.metrics is a
    * convenience cache, allowed to be empty/stale, outside space_revision
-   * accounting) — deliberately in-memory only, never written to SQLite. */
+   * accounting) — deliberately in-memory only, never written to SQLite.
+   * Capped at METRIC_CACHE_MAX_METRICS distinct metric_ids with
+   * least-recently-updated eviction (see touchMetricCache) so a source
+   * rotating metric_ids without bound can't grow this without bound. Map
+   * iteration order is insertion order and JS re-inserts a key at the end
+   * on delete+set, which is exactly what touchMetricCache relies on to
+   * track recency. */
   private metricsCache = new Map<string, MetricSample>();
   private rateLimiters = new WeakMap<WebSocket, RateLimiterState>();
   private hotPathCounter = 0;
@@ -847,13 +854,28 @@ export class SpaceHub extends DurableObject<Env> {
       // is acceptable (the whole cache is best-effort, section 6.2).
       const cached = this.metricsCache.get(sample.metric_id);
       if (cached && sample.ts <= cached.ts) continue;
-      this.metricsCache.set(sample.metric_id, sample);
+      this.touchMetricCache(sample.metric_id, sample);
       accepted.push(sample);
     }
     if (accepted.length > 0) this.broadcastMetricFrame({ device_id: body.device_id, metrics: accepted });
     // Deliberately no this.ctx.storage.sql.exec(...) anywhere in this
     // method and no revision change — see the class-level cost notes and
     // docs/design/realtime-server.md.
+  }
+
+  /** Upserts one metric_id into metricsCache, enforcing
+   * METRIC_CACHE_MAX_METRICS with least-recently-updated eviction. Always
+   * deletes before re-setting (even for an existing key) so the entry
+   * moves to the end of Map iteration order — that's what makes "the
+   * first key in iteration order" equivalent to "the least recently
+   * updated key" below. */
+  private touchMetricCache(metricId: string, sample: MetricSample): void {
+    this.metricsCache.delete(metricId);
+    if (this.metricsCache.size >= METRIC_CACHE_MAX_METRICS) {
+      const oldest = this.metricsCache.keys().next().value;
+      if (oldest !== undefined) this.metricsCache.delete(oldest);
+    }
+    this.metricsCache.set(metricId, sample);
   }
 
   private broadcastMetricFrame(body: MetricFrameBody): void {

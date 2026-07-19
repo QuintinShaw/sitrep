@@ -44,6 +44,18 @@ export const METRIC_FRAME_RATE_PER_SEC = 10;
 /** SPEC.md section 12: 2 Hz ceiling per metric_id. */
 export const METRIC_SAMPLE_MIN_INTERVAL_MS = 500;
 
+/** Cardinality cap on `SpaceHub#metricsCache` (distinct `metric_id`s held
+ * at once, per space). Without this, a compromised or misbehaving source
+ * that rotates metric_ids without bound would grow DO memory unboundedly
+ * until the instance crashes — the existing per-frame size/rate limits
+ * (METRIC_FRAME_RATE_PER_SEC, the 64-samples-per-frame guard in
+ * guards.ts) bound how fast the cache can grow but not how big it can
+ * get. Beyond this cap, the least-recently-updated metric_id is evicted
+ * to make room (see SpaceHub#touchMetricCache); eviction is safe per
+ * SPEC.md section 6.2 (snapshot.metrics is a best-effort cache, evicted
+ * metrics are simply absent from the next snapshot). */
+export const METRIC_CACHE_MAX_METRICS = 256;
+
 export function newEnvelopeId(): string {
   return crypto.randomUUID();
 }
