@@ -111,13 +111,29 @@ public struct AutomationInfo: Codable, Identifiable, Sendable, Equatable {
     public var state: State
     public var lastRun: Date?
 
+    public init(id: String, name: String, executor: Executor, schedule: Schedule, state: State, lastRun: Date? = nil) {
+        self.id = id
+        self.name = name
+        self.executor = executor
+        self.schedule = schedule
+        self.state = state
+        self.lastRun = lastRun
+    }
+
     public struct Executor: Codable, Sendable, Equatable {
         public var kind: String
+
+        public init(kind: String) { self.kind = kind }
     }
 
     public struct Schedule: Codable, Sendable, Equatable {
         public var kind: String
         public var everySeconds: Int
+
+        public init(kind: String, everySeconds: Int) {
+            self.kind = kind
+            self.everySeconds = everySeconds
+        }
 
         enum CodingKeys: String, CodingKey {
             case kind

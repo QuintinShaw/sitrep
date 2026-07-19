@@ -81,7 +81,29 @@ final class AppModel {
     /// computed against this, not against server timestamps.
     var lastSyncAt: Date?
 
-    private var pollTask: Task<Void, Never>?
+    /// The realtime WebSocket connection's lifecycle (SitrepKit's
+    /// `RealtimeClient`). Drives the subtle sync-status indicator; `.live`
+    /// means tasks/metrics/events/automations are updating from `delta`s in
+    /// real time rather than from the HTTP fallback poll below.
+    var connectionPhase: RealtimeClient.Phase = .idle
+    /// One-shot: this device's realtime connection was superseded by
+    /// another connection using the same credential (SPEC.md §9.4). Surfaced
+    /// once, non-disruptively, then cleared by the view that shows it.
+    var supersededNotice = false
+
+    private var realtimeClient: RealtimeClient?
+    private var realtimeObservers: [Task<Void, Never>] = []
+    /// Low-frequency (>=30s) HTTP snapshot polling, used ONLY while the
+    /// realtime connection is down for multiple backoff cycles — see
+    /// `RealtimeClient.Notice.fellBackToPolling`/`.recovered`. This replaces
+    /// what used to be an always-on 3s poll loop: normal sync now comes from
+    /// `delta`s over the WebSocket.
+    private var fallbackPollTask: Task<Void, Never>?
+    /// Whether the fallback poll is *supposed* to be running (independent of
+    /// whether `fallbackPollTask` is currently non-nil) — lets `ensurePolling()`
+    /// revive it defensively if something silently killed the task while
+    /// the realtime connection was still down.
+    private var fallbackActive = false
     var lastError: String?
 
     // Keychain-backed (survives reinstalls); UserDefaults is a legacy
@@ -109,6 +131,13 @@ final class AppModel {
         WidgetCenter.shared.reloadAllTimelines()
         let client = self.client
         Task { await PushRegistrar.shared.configure(client: client) }
+        // Credentials changed under an existing connection (e.g. re-paired)
+        // — reconnect with the new ones rather than keep talking under the
+        // old identity.
+        if realtimeClient != nil {
+            stopRealtime()
+            enterForeground()
+        }
     }
 
     func start() async {
@@ -121,7 +150,117 @@ final class AppModel {
         }
         await PushRegistrar.shared.configure(client: client)
         await PushRegistrar.shared.startObserving()
-        ensurePolling()
+        // Seed the UI with one HTTP snapshot immediately; the realtime
+        // connection (started below) then takes over as the live source.
+        await refresh()
+        enterForeground()
+    }
+
+    // MARK: - Realtime sync (foreground WebSocket + HTTP fallback)
+
+    /// Call when the app becomes foreground-active. Idempotent.
+    func enterForeground() {
+        guard !needsOnboarding else { return }
+        startRealtime()
+    }
+
+    /// Call when the app leaves the foreground. The interest lease simply
+    /// lapses server-side (SPEC.md §7) rather than being released with an
+    /// explicit `unsubscribe` — closing the connection is enough.
+    func leaveBackground() {
+        stopRealtime()
+        stopFallbackPolling()
+    }
+
+    private func startRealtime() {
+        guard let restClient = client, let url = restClient.realtimeURL, !deviceID.isEmpty else { return }
+        if let existing = realtimeClient {
+            // Idempotent on the actor side even if already running — this
+            // doubles as the revival path if something silently killed the
+            // connection's internal loop without going through `stop()`.
+            Task { await existing.start() }
+            return
+        }
+        let configuration = RealtimeClient.Configuration(
+            url: url, token: token.isEmpty ? nil : token, deviceID: deviceID)
+        let rt = RealtimeClient(configuration: configuration)
+        realtimeClient = rt
+        realtimeObservers = [
+            Task { [weak self] in
+                for await phase in rt.phases {
+                    self?.connectionPhase = phase
+                }
+            },
+            Task { [weak self] in
+                for await state in rt.states {
+                    self?.applyRealtimeState(state)
+                }
+            },
+            Task { [weak self] in
+                for await notice in rt.notices {
+                    self?.handleRealtimeNotice(notice)
+                }
+            },
+        ]
+        Task { await rt.start() }
+    }
+
+    private func stopRealtime() {
+        guard let rt = realtimeClient else { return }
+        realtimeClient = nil
+        for observer in realtimeObservers { observer.cancel() }
+        realtimeObservers = []
+        connectionPhase = .idle
+        Task { await rt.stop() }
+    }
+
+    private func applyRealtimeState(_ state: SpaceState) {
+        tasks = state.uiTasks
+        let sortedMetrics = state.uiMetrics
+        // Widgets refresh on a slow OS budget; while the app is foreground
+        // we piggyback any change onto them so the two surfaces never
+        // disagree (same rule `refresh()` applies for the HTTP path).
+        if sortedMetrics != metrics {
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+        metrics = sortedMetrics
+        events = state.uiEvents
+        automations = state.uiAutomations
+        lastError = nil
+        lastSyncAt = .now
+        adoptOrphanedTasks()
+    }
+
+    private func handleRealtimeNotice(_ notice: RealtimeClient.Notice) {
+        switch notice {
+        case .superseded:
+            supersededNotice = true
+        case .serverError(let code, let message):
+            lastError = "\(code.rawValue): \(message)"
+        case .revisionGap:
+            break // transparent to the user; the client re-resumes on its own
+        case .fellBackToPolling:
+            startFallbackPolling()
+        case .recovered:
+            stopFallbackPolling()
+        }
+    }
+
+    private func startFallbackPolling() {
+        fallbackActive = true
+        guard fallbackPollTask == nil else { return }
+        fallbackPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+    }
+
+    private func stopFallbackPolling() {
+        fallbackActive = false
+        fallbackPollTask?.cancel()
+        fallbackPollTask = nil
     }
 
     /// v2 intentionally breaks the old space/auth model. Keychain values
@@ -154,17 +293,16 @@ final class AppModel {
         }
     }
 
-    /// The poll loop is owned, observable, and restartable — whatever kills
-    /// it (suspension edge cases, cancellation), the next foreground pass
-    /// revives it.
+    /// Called on every `scenePhase == .active` transition (see
+    /// `MainTabView`). Both the realtime connection and the HTTP fallback
+    /// poll are owned, observable, and restartable — whatever kills them
+    /// (suspension edge cases, cancellation), the next foreground pass
+    /// revives them. This is the same self-healing shape the old always-on
+    /// 3s poll loop used; it now applies to `RealtimeClient.start()`
+    /// (idempotent even if already running) and to the fallback poll task.
     func ensurePolling() {
-        if let pollTask, !pollTask.isCancelled { return }
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.refresh()
-                try? await Task.sleep(for: .seconds(3))
-            }
-        }
+        enterForeground()
+        if fallbackActive { startFallbackPolling() }
     }
 
     /// Local fallback for remote push-to-start: if the server has running
@@ -207,6 +345,8 @@ final class AppModel {
     /// Revoke this phone's device record, clear credentials, return to
     /// onboarding. Other devices in the space are untouched.
     func disconnect() async {
+        stopRealtime()
+        stopFallbackPolling()
         if !deviceID.isEmpty {
             try? await client?.revokeDevice(id: deviceID)
         }
