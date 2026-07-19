@@ -56,6 +56,27 @@ final class RealtimeMessageFixtureTests: XCTestCase {
         "role-viewer-command-origin-server.json",
     ]
 
+    /// The specific constraint each schema-invalid fixture must trip, as a
+    /// substring of the thrown error's description. Pinning the REASON (not
+    /// just "some error") catches regressions where a fixture starts
+    /// failing for the wrong reason — e.g. a decoding-order change masking
+    /// the intended violation with an unrelated one.
+    private static let expectedRejectionReasons: [String: String] = [
+        "ack-neither-acked-nor-in-reply-to.json": "'acked' and/or 'in_reply_to'",
+        "command-pause-with-automation-id.json": "forbids automation_id",
+        "command-throttle-with-task-id.json": "forbids task_id and automation_id",
+        "command-viewer-sends-throttle.json": "requires origin 'server'",
+        "envelope-carries-credential-field.json": "unexpected field(s): token",
+        "error-missing-retryable-fatal.json": "retryable",       // DecodingError.keyNotFound
+        "hello-offer-empty-protocol-versions.json": "protocol_versions must not be empty",
+        "message-event-timestamp-in-seconds.json": "occurred_at is not a Unix ms timestamp",
+        "metric-frame-oversized-value.json": "value exceeds max length 256",
+        "resume-negative-revision.json": "last_revision -1 below minimum 0",
+        "subscribe-unknown-topic.json": "automation",            // DecodingError: no such RTTopic case
+        "task-event-missing-device-seq.json": "device_seq",      // DecodingError.keyNotFound
+        "task-event-progress-missing-percent.json": "percent required when kind == 'progress'",
+    ]
+
     func testInvalidFixturesFailDecodeOrAreUnauthorized() throws {
         let names = try FixtureLoader.names(in: "invalid")
         XCTAssertFalse(names.isEmpty)
@@ -64,17 +85,25 @@ final class RealtimeMessageFixtureTests: XCTestCase {
             if Self.roleTaggedInvalidFixtures.contains(name) {
                 try assertRejectedByAuthorization(fixture: name, wrapperData: bytes)
             } else {
-                assertFailsToDecode(fixture: name, data: bytes)
+                guard let expectedReason = Self.expectedRejectionReasons[name] else {
+                    XCTFail("invalid/\(name): new fixture — add its expected rejection reason to the map")
+                    continue
+                }
+                assertFailsToDecode(fixture: name, data: bytes, reasonContaining: expectedReason)
             }
         }
     }
 
-    private func assertFailsToDecode(fixture: String, data: Data) {
+    private func assertFailsToDecode(fixture: String, data: Data, reasonContaining expected: String) {
         XCTAssertThrowsError(try RealtimeFrame.decode(data), "invalid/\(fixture) should fail to decode") { error in
             guard error is RealtimeDecodingError || error is DecodingError else {
                 XCTFail("invalid/\(fixture): unexpected error type \(error)")
                 return
             }
+            let description = String(describing: error)
+            XCTAssertTrue(
+                description.contains(expected),
+                "invalid/\(fixture): rejected for the wrong reason — expected description containing '\(expected)', got: \(description)")
         }
     }
 

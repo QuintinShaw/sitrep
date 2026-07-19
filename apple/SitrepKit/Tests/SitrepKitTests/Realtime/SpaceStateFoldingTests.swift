@@ -65,6 +65,26 @@ final class SpaceStateFoldingTests: XCTestCase {
         XCTAssertEqual(task.message, "boom")
     }
 
+    /// §6.4 boundary: an event WITHOUT `step` leaves the previous step
+    /// unchanged (absence is not a clear); only `done`/`failed` clear it.
+    /// Same for `title`/`percent`: absent means "unchanged".
+    func testFoldingEventWithoutStepKeepsPreviousStep() {
+        let events: [DeltaEvent] = [
+            .taskEvent(taskEvent(seq: 1, kind: .started, occurredAt: 1000, title: "Job")),
+            .taskEvent(taskEvent(seq: 2, kind: .progress, occurredAt: 2000, percent: 40, step: "phase 1")),
+            .taskEvent(taskEvent(seq: 3, kind: .progress, occurredAt: 3000, percent: 70)), // no step, no title
+        ]
+        let state = applyAsDeltaStream(events)
+        let task = try! XCTUnwrap(state.tasks["run-1"])
+        XCTAssertEqual(task.step, "phase 1", "absent step must not clear the previous one")
+        XCTAssertEqual(task.title, "Job")
+        XCTAssertEqual(task.percent, 70)
+
+        // ...and done DOES clear it.
+        let finished = applyAsDeltaStream(events + [.taskEvent(taskEvent(seq: 4, kind: .done, occurredAt: 4000))])
+        XCTAssertNil(finished.tasks["run-1"]?.step)
+    }
+
     func testTaskFoldingMessageStaysAbsentWhileRunning() {
         let events: [DeltaEvent] = [
             .taskEvent(taskEvent(seq: 1, kind: .started, occurredAt: 1000, title: "Job")),
