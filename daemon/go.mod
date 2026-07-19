@@ -2,7 +2,10 @@ module github.com/QuintinShaw/sitrep/daemon
 
 go 1.26
 
-require modernc.org/sqlite v1.39.0
+require (
+	github.com/coder/websocket v1.8.15
+	modernc.org/sqlite v1.39.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
