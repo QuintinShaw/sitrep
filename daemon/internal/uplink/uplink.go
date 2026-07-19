@@ -21,7 +21,6 @@ import (
 
 	"github.com/QuintinShaw/sitrep/daemon/internal/protocol"
 	rtclient "github.com/QuintinShaw/sitrep/daemon/internal/realtime/client"
-	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/outbox"
 	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/wire"
 )
 
@@ -85,8 +84,23 @@ type Uplink struct {
 	kick    chan struct{}
 	done    chan struct{}
 
-	// rtRetry holds reliable events (task.event/message.event) whose
-	// enqueue into the realtime outbox hit outbox.ErrOutboxFull. They are
+	// rtMu guards rtRetry and serializes sendReliable's check-then-act step
+	// against retryRealtime's drain. It is a separate lock from mu (rather
+	// than reusing it) because sendReliable may hold it across a live
+	// outbox.Enqueue call (a blocking DB transaction) and must not block
+	// unrelated Offer() bookkeeping (pending/queue/logs) while doing so.
+	//
+	// The invariant this protects: device_seq is allocated only by a
+	// successful Enqueue, so a new event must never win a race into Enqueue
+	// while an older one is still waiting in rtRetry — that would hand the
+	// newer event a lower seq and invert wire order relative to the older
+	// one once it is retried. See sendReliable/retryRealtime.
+	rtMu sync.Mutex
+
+	// rtRetry holds reliable events (task.event/message.event) that could
+	// not be enqueued into the realtime outbox on first attempt — either
+	// because the outbox hit its row cap (outbox.ErrOutboxFull) or because
+	// Enqueue itself failed transiently (see sendReliable). They are
 	// retried, oldest first, on every flush tick until Enqueue succeeds —
 	// see routeToRealtime and retryRealtime. This is local backpressure,
 	// not a fallback: these events must not travel the legacy HTTP path
@@ -232,34 +246,36 @@ func (u *Uplink) routeToRealtime(realtime *rtclient.Client, ev Event) bool {
 	}
 }
 
-// sendReliable calls send() once and always reports "handled" (true) for a
-// reliable event — the caller (routeToRealtime) must never fall back to
-// HTTP for these, so there is nothing left for it to do with the return
-// value except decide whether to retry locally.
+// sendReliable always reports "handled" (true) for a reliable event — the
+// caller (routeToRealtime) must never fall back to HTTP for these, so there
+// is nothing left for it to do except decide whether to retry locally.
 //
-// On outbox.ErrOutboxFull (the bounded local queue hit its row cap because
-// the server has not been acking), send is queued for retry: local
-// backpressure, not a fallback. It is retried oldest-first on every flush
-// tick (retryRealtime) until Enqueue succeeds, which self-heals once acks
-// drain the backlog (SPEC.md section 5.3) — events already in the outbox
-// are durable in SQLite and replay in seq order on their own. FIFO order
-// matters here: device_seq is allocated only by a successful Enqueue, so
-// retrying anything but the oldest queued item first could hand a later
-// event a lower seq than an earlier one still waiting.
+// The whole check-then-act step runs under rtMu, held for the duration of
+// any direct send() attempt below:
 //
-// Any other error (e.g. a malformed event failing wire validation) is not
-// a transient condition retrying would fix, and per the same no-fallback
-// rule it must not be forwarded to /v2 either — it is logged and dropped.
+//   - rtRetry non-empty: an older event is still waiting for Enqueue to
+//     succeed. This new one must NOT attempt Enqueue directly — doing so
+//     could win a device_seq ahead of the older event, inverting wire order
+//     once the older one is eventually retried (the BLOCKER this guards
+//     against). It is appended behind the queue instead, preserving FIFO.
+//   - rtRetry empty: send() is attempted now. On failure, see isRetryable.
+//
+// retryRealtime holds the same rtMu across its whole drain, so a concurrent
+// Offer can never slip an Enqueue in between two items it is draining, or
+// between its "queue empty" check and this function's own check above.
 func (u *Uplink) sendReliable(send func() error) bool {
+	u.rtMu.Lock()
+	defer u.rtMu.Unlock()
+
+	if len(u.rtRetry) > 0 {
+		u.rtRetry = append(u.rtRetry, send)
+		u.wakeFlush()
+		return true
+	}
 	if err := send(); err != nil {
-		if errors.Is(err, outbox.ErrOutboxFull) {
-			u.mu.Lock()
+		if isRetryable(err) {
 			u.rtRetry = append(u.rtRetry, send)
-			u.mu.Unlock()
-			select {
-			case u.kick <- struct{}{}:
-			default:
-			}
+			u.wakeFlush()
 		} else {
 			u.cfg.Logf("uplink: dropping reliable event, realtime enqueue failed: %v", err)
 		}
@@ -267,30 +283,61 @@ func (u *Uplink) sendReliable(send func() error) bool {
 	return true
 }
 
-// retryRealtime re-attempts every event queued by sendReliable, oldest
-// first, stopping at the first one that still fails so order is preserved
-// (see sendReliable). Called once per flush tick from loop, so a drained
-// outbox flushes its whole backlog within one tick.
-func (u *Uplink) retryRealtime() {
-	for {
-		u.mu.Lock()
-		if len(u.rtRetry) == 0 {
-			u.mu.Unlock()
-			return
-		}
-		send := u.rtRetry[0]
-		u.mu.Unlock()
+// isRetryable classifies a failure from a sendReliable closure (ultimately
+// an outbox.Enqueue error) as transient (retry) or permanent (log-and-drop).
+//
+// outbox.ErrOutboxFull is transient by definition: local backpressure that
+// self-heals once acks drain the backlog (SPEC.md section 5.3).
+//
+// rtclient.ErrInvalidBody is the one permanent case: the event failed wire
+// validation (bad kind, out-of-range percent, oversized text, ...), and
+// retrying the exact same body can never produce a different result.
+//
+// Anything else — including an error this function doesn't recognize — is
+// treated as transient. Enqueue's non-ErrOutboxFull failures are BeginTx,
+// COUNT, INSERT, or Commit errors against the local SQLite file: transient
+// conditions (SQLITE_BUSY, a disk I/O blip) that a later retry can plausibly
+// clear. Losing a reliable task.done/message.send to a momentary disk
+// hiccup is not acceptable, so the default for an unrecognized error is
+// retry, never drop. There is no cap on rtRetry's growth during an outage;
+// this is the same bounded-by-producer-rate tradeoff already accepted for
+// outbox.ErrOutboxFull.
+func isRetryable(err error) bool {
+	if errors.Is(err, rtclient.ErrInvalidBody) {
+		return false
+	}
+	return true
+}
 
-		err := send()
-		if err != nil && errors.Is(err, outbox.ErrOutboxFull) {
-			return // still full; try again next tick
-		}
-		if err != nil {
+// retryRealtime re-attempts every event queued by sendReliable, oldest
+// first, stopping at the first one that still fails transiently so order is
+// preserved (see sendReliable). Called once per flush tick from loop, so a
+// drained outbox flushes its whole backlog within one tick. Holds rtMu for
+// its entire drain (not just each item's list-mutation) so a concurrent
+// Offer's sendReliable can never observe rtRetry as empty and race an
+// Enqueue in ahead of an item this loop is still working through.
+func (u *Uplink) retryRealtime() {
+	u.rtMu.Lock()
+	defer u.rtMu.Unlock()
+	for len(u.rtRetry) > 0 {
+		send := u.rtRetry[0]
+		if err := send(); err != nil {
+			if isRetryable(err) {
+				return // still failing transiently; try again next tick
+			}
 			u.cfg.Logf("uplink: dropping reliable event, realtime enqueue failed on retry: %v", err)
 		}
-		u.mu.Lock()
 		u.rtRetry = u.rtRetry[1:]
-		u.mu.Unlock()
+	}
+}
+
+// wakeFlush nudges the flush loop to run sooner than the next tick, e.g.
+// after queuing a reliable event for retry so a freed outbox row is picked
+// up promptly rather than waiting a full FlushInterval.
+func (u *Uplink) wakeFlush() {
+	select {
+	case u.kick <- struct{}{}:
+	default:
 	}
 }
 
