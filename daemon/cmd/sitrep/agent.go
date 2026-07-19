@@ -6,7 +6,10 @@ import (
 	"time"
 
 	"github.com/QuintinShaw/sitrep/daemon/internal/api"
+	"github.com/QuintinShaw/sitrep/daemon/internal/config"
 	"github.com/QuintinShaw/sitrep/daemon/internal/protocol"
+	rtclient "github.com/QuintinShaw/sitrep/daemon/internal/realtime/client"
+	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/outbox"
 	"github.com/QuintinShaw/sitrep/daemon/internal/runner"
 	"github.com/QuintinShaw/sitrep/daemon/internal/uplink"
 )
@@ -22,6 +25,16 @@ func cmdAgent(args []string) {
 		fatal(err)
 	}
 	fmt.Fprintf(os.Stderr, "sitrep agent: scheduling automations from %s\n", client.Server)
+
+	// Realtime uplink: opt-in feature flag (SITREP_REALTIME=1 or
+	// config.json's realtime_enabled). One shared connection for the
+	// whole resident agent process, mirroring the protocol's "at most one
+	// connection per device" model (proto/realtime/SPEC.md section 9.4) —
+	// unlike the one-shot `sitrep run` CLI, this process lives long
+	// enough for a persistent WebSocket connection to make sense. Default
+	// (flag off) leaves every automation run on the existing HTTP-only
+	// path, byte-for-byte as before this feature existed.
+	rt := newAgentRealtimeUplink()
 
 	lastRun := map[string]time.Time{}
 	running := map[string]bool{}
@@ -72,7 +85,7 @@ func cmdAgent(args []string) {
 			lastRun[automation.ID] = time.Now()
 			running[automation.ID] = true
 			go func(automation api.Automation) {
-				runAutomation(client, automation)
+				runAutomation(client, automation, rt)
 				finished <- automation.ID
 			}(automation)
 		}
@@ -81,11 +94,47 @@ func cmdAgent(args []string) {
 	}
 }
 
+// newAgentRealtimeUplink builds the shared realtime client for the resident
+// agent process when config.RealtimeEnabled is set, or returns nil (the
+// safe, fully-backward-compatible default). A nil *rtclient.Client is
+// nil-safe everywhere it's passed (uplink.Config.Realtime nil disables the
+// feature entirely, same as today).
+func newAgentRealtimeUplink() *rtclient.Client {
+	cfg := config.Load()
+	if !cfg.RealtimeEnabled {
+		return nil
+	}
+	if cfg.Server == "" || cfg.DeviceID == "" || cfg.Space == "" {
+		fmt.Fprintln(os.Stderr, "sitrep agent: realtime uplink enabled but server/device_id/space is not configured; staying on HTTP ingest")
+		return nil
+	}
+	store, err := outbox.Open(config.RealtimeOutboxPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sitrep agent: realtime outbox: %v; staying on HTTP ingest\n", err)
+		return nil
+	}
+	url := cfg.RealtimeURLFor()
+	fmt.Fprintf(os.Stderr, "sitrep agent: realtime uplink enabled (%s)\n", url)
+	return rtclient.New(rtclient.Config{
+		URL:      url,
+		Token:    cfg.Token,
+		DeviceID: cfg.DeviceID,
+		Space:    cfg.Space,
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "sitrep agent: realtime: "+format+"\n", args...)
+		},
+		Outbox: store,
+	})
+}
+
 // runAutomation executes one round with a stable automation identity. Task
 // lifecycle belongs to bounded `sitrep run`; scheduled work emits metrics and
-// messages.
-func runAutomation(client *api.Client, automation api.Automation) {
-	up := uplink.New(uplinkConfig(""))
+// messages. rt is the shared realtime uplink (nil unless the feature flag
+// is on).
+func runAutomation(client *api.Client, automation api.Automation, rt *rtclient.Client) {
+	cfg := uplinkConfig("")
+	cfg.Realtime = rt
+	up := uplink.New(cfg)
 	defer up.Close()
 	sourceID := "a" + automation.ID
 	emitAll := runner.MakeEmitter(up, sourceID, os.Getenv("SITREP_DEBUG") != "")

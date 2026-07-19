@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/QuintinShaw/sitrep/daemon/internal/protocol"
+	rtclient "github.com/QuintinShaw/sitrep/daemon/internal/realtime/client"
+	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/wire"
 )
 
 // Event is the wire form of a protocol event (schema/event.schema.json).
@@ -47,6 +49,17 @@ type Config struct {
 	// (including empty heartbeats every 3 ticks) carry ?sources= and any
 	// commands in the response are delivered on Commands.
 	CommandSource string
+
+	// Realtime is an opt-in feature flag: when non-nil, every reliable
+	// event (task lifecycle + message.send) and every metric.update this
+	// Uplink is Offer()ed is routed to the realtime WebSocket uplink
+	// (internal/realtime/client) instead of the HTTP /v2/ingest batch —
+	// the two paths are never used for the same event, so nothing is
+	// double-written. task.log passthrough output is unaffected: it has
+	// no realtime-protocol equivalent and always continues over HTTP.
+	// Nil (the default) preserves this package's exact prior behavior.
+	// The caller owns Realtime's lifecycle (construction and Close).
+	Realtime *rtclient.Client
 }
 
 type Uplink struct {
@@ -99,6 +112,22 @@ func (u *Uplink) Offer(ev Event) {
 		return
 	}
 	u.mu.Lock()
+	if u.closed {
+		u.mu.Unlock()
+		return
+	}
+	realtime := u.cfg.Realtime
+	u.mu.Unlock()
+
+	// Feature flag: when a realtime uplink is configured, every kind with a
+	// realtime-protocol equivalent is routed there instead of the HTTP
+	// batch below, so the same event is never sent both ways. task.log (no
+	// realtime equivalent) and any realtime send failure fall through.
+	if realtime != nil && u.routeToRealtime(realtime, ev) {
+		return
+	}
+
+	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.closed {
 		return
@@ -123,6 +152,94 @@ func (u *Uplink) Offer(ev Event) {
 		default:
 		}
 	}
+}
+
+// routeToRealtime translates ev into the matching realtime-protocol
+// message and hands it to the realtime client. It reports whether it
+// handled ev (true) so the caller skips the HTTP batch entirely for that
+// event, or leaves it (false) to fall through unchanged — either because
+// the kind has no realtime equivalent (task.log) or because the realtime
+// send itself failed, in which case losing the event silently would be
+// worse than a harmless duplicate over HTTP.
+func (u *Uplink) routeToRealtime(realtime *rtclient.Client, ev Event) bool {
+	switch ev.Kind {
+	case protocol.TaskStart, protocol.TaskProgress, protocol.TaskStep, protocol.TaskDone, protocol.TaskFail:
+		te := rtclient.TaskEvent{
+			TaskID:     ev.SourceID,
+			Kind:       taskEventKind(ev.Kind),
+			OccurredAt: parseEventTime(ev.TS),
+			Display:    displayHints(ev),
+		}
+		switch ev.Kind {
+		case protocol.TaskStart:
+			te.Title = ev.Title
+		case protocol.TaskProgress:
+			p := ev.Percent
+			te.Percent = &p
+			te.Step = ev.Step
+		case protocol.TaskStep:
+			te.Step = ev.Step
+		case protocol.TaskDone, protocol.TaskFail:
+			te.Message = ev.Text
+		}
+		return realtime.SendTaskEvent(te) == nil
+	case protocol.MessageSend:
+		return realtime.SendMessageEvent(rtclient.MessageEvent{
+			Level:      ev.Level,
+			Text:       ev.Text,
+			OccurredAt: parseEventTime(ev.TS),
+		}) == nil
+	case protocol.MetricUpdate:
+		realtime.SendMetric(wire.MetricSample{
+			MetricID:   ev.Key,
+			Value:      ev.Value,
+			Label:      ev.Label,
+			TS:         parseEventTime(ev.TS).UnixMilli(),
+			Display:    displayHints(ev),
+			Target:     ev.Target,
+			Min:        ev.Min,
+			Max:        ev.Max,
+			AlertAbove: ev.AlertAbove,
+			AlertBelow: ev.AlertBelow,
+		})
+		return true // metric.frame is fire-and-forget; there is no failure to react to
+	default:
+		return false // e.g. task.log: no realtime-protocol equivalent
+	}
+}
+
+func taskEventKind(k protocol.Kind) string {
+	switch k {
+	case protocol.TaskStart:
+		return "started"
+	case protocol.TaskProgress:
+		return "progress"
+	case protocol.TaskStep:
+		return "step"
+	case protocol.TaskDone:
+		return "done"
+	case protocol.TaskFail:
+		return "failed"
+	default:
+		return ""
+	}
+}
+
+func displayHints(ev Event) *wire.DisplayHints {
+	if ev.Icon == "" && ev.Tint == "" && ev.Template == "" {
+		return nil
+	}
+	return &wire.DisplayHints{Icon: ev.Icon, Tint: ev.Tint, Template: ev.Template}
+}
+
+// parseEventTime parses the RFC3339 timestamp uplink.Event carries
+// (protocol.go / runner.MakeEmitter always stamp one); a malformed or empty
+// value falls back to now rather than producing an invalid envelope.
+func parseEventTime(ts string) time.Time {
+	if t, err := time.Parse(time.RFC3339, ts); err == nil {
+		return t
+	}
+	return time.Now()
 }
 
 // LogLine buffers one passthrough output line for the task detail view.
