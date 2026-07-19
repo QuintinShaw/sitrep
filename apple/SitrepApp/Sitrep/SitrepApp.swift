@@ -388,6 +388,17 @@ final class AppModel {
         }
     }
 
+    /// The realtime client's own phase, queried on the actor — the
+    /// authority for HTTP-overwrite decisions. The MainActor-cached
+    /// `connectionPhase` arrives via a separate AsyncStream from the state
+    /// updates, so it can momentarily lag behind an already-applied live
+    /// state; deciding on the cache would open a window where a refresh
+    /// reads a stale non-live phase and overwrites delta-derived state.
+    private func authoritativePhase() async -> RealtimeClient.Phase {
+        guard let realtimeClient else { return .idle }
+        return await realtimeClient.currentPhase
+    }
+
     func refresh() async {
         guard let client else { return }
         do {
@@ -398,13 +409,14 @@ final class AppModel {
             presence = snapshot.presence
             lastError = nil
             lastSyncAt = .now
-            // Checked AFTER the await, deliberately: while the WebSocket is
-            // live, deltas own the four reliable collections and an HTTP
-            // response — possibly computed before the connection went live —
-            // must not clobber them. Re-checking here (not at request time)
-            // also covers the in-flight race: a fallback-poll or pull-to-
-            // refresh response that lands after `.recovered` is dropped.
-            guard connectionPhase.allowsReliableStateOverwrite else { return }
+            // Checked AFTER the await, against the ACTOR's phase (not the
+            // stream-fed MainActor cache): while the WebSocket is live,
+            // deltas own the four reliable collections and an HTTP response
+            // — possibly computed before the connection went live — must
+            // not clobber them. This covers the in-flight race: a fallback-
+            // poll or pull-to-refresh response that lands after `.recovered`
+            // is dropped.
+            guard await authoritativePhase().allowsReliableStateOverwrite else { return }
             events = snapshot.messages.map(\.state)
             automations = snapshot.automations.sorted { $0.name < $1.name }
             tasks = snapshot.tasks.sorted { $0.updatedAt > $1.updatedAt }
@@ -417,10 +429,20 @@ final class AppModel {
             }
             metrics = sorted
             adoptOrphanedTasks()
+            // Post-write reconciliation, closing the last sliver: if the
+            // connection went live between the check above and these writes,
+            // re-apply the actor's authoritative state so the delta-derived
+            // data wins. (If it instead goes live after THIS check, the
+            // states-stream delivery that accompanied the flip is still
+            // queued for the MainActor and will overwrite the HTTP data on
+            // arrival.)
+            if let rt = realtimeClient, await !rt.currentPhase.allowsReliableStateOverwrite {
+                applyRealtimeState(await rt.currentState)
+            }
         } catch {
             // An HTTP hiccup while realtime is live is not a sync outage —
             // don't raise the banner over it.
-            if connectionPhase.allowsReliableStateOverwrite {
+            if await authoritativePhase().allowsReliableStateOverwrite {
                 lastError = error.localizedDescription
             }
         }
