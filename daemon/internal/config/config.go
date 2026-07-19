@@ -26,7 +26,7 @@ type Config struct {
 	// path until this is explicitly turned on. Overridable with the
 	// SITREP_REALTIME env var (1/true/yes).
 	RealtimeEnabled bool `json:"realtime_enabled,omitempty"`
-	// RealtimeURL overrides the wss://<server>/v2/realtime endpoint this
+	// RealtimeURL overrides the wss://<server>/v3/realtime endpoint this
 	// package derives from Server by default. Overridable with
 	// SITREP_REALTIME_URL.
 	RealtimeURL string `json:"realtime_url,omitempty"`
@@ -70,13 +70,13 @@ func Load() Config {
 	return cfg
 }
 
-// RealtimeURLFor derives the wss://.../v2/realtime endpoint from cfg.Server
+// RealtimeURLFor derives the wss://.../v3/realtime endpoint from cfg.Server
 // (http -> ws, https -> wss), unless cfg.RealtimeURL explicitly overrides
 // it. The realtime protocol (proto/realtime/SPEC.md) is transport-agnostic
-// and does not fix a URL path; "/v2/realtime" is this daemon's own
-// convention, matching the existing "/v2/ingest" and "/v2/automations"
-// HTTP routes, and MUST match whatever path the server implementation
-// exposes once it lands.
+// and does not fix a URL path; "/v3/realtime" is the path agreed across
+// implementation lines (the server exposes it there, and the Apple client
+// targets the same), distinct from the existing "/v2/ingest" and
+// "/v2/automations" HTTP routes.
 func (cfg Config) RealtimeURLFor() string {
 	if cfg.RealtimeURL != "" {
 		return cfg.RealtimeURL
@@ -88,7 +88,7 @@ func (cfg Config) RealtimeURLFor() string {
 	case strings.HasPrefix(u, "http://"):
 		u = "ws://" + strings.TrimPrefix(u, "http://")
 	}
-	return strings.TrimRight(u, "/") + "/v2/realtime"
+	return strings.TrimRight(u, "/") + "/v3/realtime"
 }
 
 func Save(cfg Config) error {
