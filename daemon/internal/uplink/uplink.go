@@ -382,83 +382,34 @@ func (u *Uplink) pollRealtimeMode() {
 	u.drainOutboxToLegacy(rt)
 }
 
-// drainOutboxToLegacy walks every reliable event durably sitting in rt's
-// outbox (real device_seq, ready to deliver) and then its overflow table (no
-// device_seq yet), oldest first in each, translating each one back into the
-// legacy uplink.Event shape and posting it to /v2/ingest. An item is only
-// retired (Ack for outbox items, DeleteOverflow for overflow items) once its
-// /v2 send actually succeeds; the first failure stops the whole drain for
-// this tick; the next flush tick resumes exactly where it left off, because
-// nothing was retired.
-//
-// Acking an outbox item may itself promote an overflow row into the outbox
-// (outbox.Store.Ack's own trigger) — the outer loop re-reads Pending() every
-// iteration rather than caching the initial list, so a promoted row is
-// picked up and drained in the same pass instead of waiting for the
-// overflow-scanning loop below.
+// drainOutboxToLegacy hands rt.DrainToLegacy the translate-and-send step for
+// every reliable event durably sitting in rt's shared outbox (real
+// device_seq, ready to deliver) and then its overflow table (no device_seq
+// yet), oldest first in each. rt owns retiring each row (Ack/DeleteOverflow)
+// and — critically — owns serializing that read-send-retire sequence
+// process-wide: rt is the one *rtclient.Client shared by every automation's
+// Uplink (see cmd/sitrep/agent.go), so without rt's own per-row locking two
+// Uplinks polling concurrently could both read and send the same unretired
+// row. See rtclient.Client.DrainToLegacy's doc comment for the full
+// invariant, including why this is also safe across a switch back to
+// realtime mid-drain.
 func (u *Uplink) drainOutboxToLegacy(rt *rtclient.Client) {
-	store := rt.Outbox()
-	space := rt.Space()
-	if store == nil {
-		return
-	}
-	ctx := context.Background()
+	rt.DrainToLegacy(context.Background(), u.legacyDrainSink)
+}
 
-	for {
-		pending, err := store.Pending(ctx, space)
-		if err != nil {
-			u.cfg.Logf("uplink: legacy drain: read outbox: %v", err)
-			return
-		}
-		if len(pending) == 0 {
-			break
-		}
-		item := pending[0]
-		ev, ok := legacyEventFromOutboxItem(item.Kind, item.Body)
-		if !ok {
-			u.cfg.Logf("uplink: legacy drain: dropping outbox item with unrecognized kind %q", item.Kind)
-			if err := store.Ack(ctx, space, item.DeviceSeq); err != nil {
-				u.cfg.Logf("uplink: legacy drain: ack seq %d: %v", item.DeviceSeq, err)
-				return
-			}
-			continue
-		}
-		if !u.sendLegacySync(ev) {
-			return // /v2 unreachable right now; resume on the next tick
-		}
-		if err := store.Ack(ctx, space, item.DeviceSeq); err != nil {
-			u.cfg.Logf("uplink: legacy drain: ack seq %d: %v", item.DeviceSeq, err)
-			return
-		}
+// legacyDrainSink is the rtclient.LegacySink for drainOutboxToLegacy:
+// translate the durable row back into the legacy uplink.Event shape and post
+// it to /v2/ingest synchronously. An unrecognized kind can never be
+// delivered on any retry, so it is logged and reported as retirable (true)
+// without ever calling sendLegacySync — matching the previous drain's
+// behavior of discarding it rather than blocking the backlog behind it.
+func (u *Uplink) legacyDrainSink(kind string, body json.RawMessage) bool {
+	ev, ok := legacyEventFromOutboxItem(kind, body)
+	if !ok {
+		u.cfg.Logf("uplink: legacy drain: dropping outbox item with unrecognized kind %q", kind)
+		return true
 	}
-
-	for {
-		overflow, err := store.OverflowPending(ctx, space)
-		if err != nil {
-			u.cfg.Logf("uplink: legacy drain: read overflow: %v", err)
-			return
-		}
-		if len(overflow) == 0 {
-			return
-		}
-		ov := overflow[0]
-		ev, ok := legacyEventFromOutboxItem(ov.Kind, ov.Body)
-		if !ok {
-			u.cfg.Logf("uplink: legacy drain: dropping overflow item with unrecognized kind %q", ov.Kind)
-			if err := store.DeleteOverflow(ctx, ov.ID); err != nil {
-				u.cfg.Logf("uplink: legacy drain: delete overflow id %d: %v", ov.ID, err)
-				return
-			}
-			continue
-		}
-		if !u.sendLegacySync(ev) {
-			return
-		}
-		if err := store.DeleteOverflow(ctx, ov.ID); err != nil {
-			u.cfg.Logf("uplink: legacy drain: delete overflow id %d: %v", ov.ID, err)
-			return
-		}
-	}
+	return u.sendLegacySync(ev)
 }
 
 // sendLegacySync posts a single event to /v2/ingest synchronously and

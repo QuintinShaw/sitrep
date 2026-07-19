@@ -98,6 +98,21 @@ type Client struct {
 	// see internal/uplink.Uplink.pollRealtimeMode's truth table.
 	serverDisabled atomic.Bool
 
+	// legacyDrainMu serializes DrainToLegacy against itself and against
+	// connectAndServe's post-hello replay, one outbox row at a time. This
+	// Client is shared process-wide (cmd/sitrep/agent.go builds exactly one
+	// per resident agent, and hands it to a fresh uplink.Uplink for every
+	// concurrently-running automation, each with its own drain-driving
+	// poll loop), so without a lock owned HERE — not per-Uplink, which
+	// would do nothing to stop two different Uplinks from racing — two
+	// callers could both read the same unacked/un-promoted row via
+	// Pending()/OverflowPending() before either retired it, and both would
+	// deliver it: a duplicate reliable event on the wire. See
+	// DrainToLegacy's doc comment for the full invariant, including how
+	// this same lock also rules out the drain racing this Client's own
+	// realtime replay across a switch back from legacy mode.
+	legacyDrainMu sync.Mutex
+
 	closing chan struct{}
 	closed  chan struct{}
 	once    sync.Once
@@ -149,6 +164,119 @@ func (c *Client) Outbox() *outbox.Store { return c.cfg.Outbox }
 // device_seq counter are bound to (SPEC.md section 5.1) — see Outbox.
 func (c *Client) Space() string { return c.cfg.Space }
 
+// LegacySink is called once per durable outbox/overflow row by
+// DrainToLegacy, oldest first, and must translate + attempt delivery of
+// that row over whatever non-realtime path the caller uses (e.g. legacy
+// /v2 HTTP). It reports whether the row should be retired:
+//
+//   - true: either delivery succeeded, or the row is permanently
+//     undeliverable (e.g. an unrecognized kind) and must never be retried —
+//     either way DrainToLegacy acks/deletes it and moves on to the next row.
+//   - false: delivery failed for a reason that might succeed later (e.g.
+//     the legacy endpoint is unreachable right now); DrainToLegacy stops
+//     immediately, retiring nothing further, so the next call resumes at
+//     exactly this row.
+type LegacySink func(kind string, body json.RawMessage) bool
+
+// DrainToLegacy walks this Client's shared outbox — every durable reliable
+// event with a real device_seq (Pending), then everything still waiting in
+// overflow (OverflowPending) — oldest first in each, handing each row to
+// sink and retiring it (Ack / DeleteOverflow) only once sink reports true.
+//
+// This is the single owning entry point for legacy-mode draining: this
+// Client is constructed once per resident agent process
+// (cmd/sitrep/agent.go) and shared by a fresh uplink.Uplink for every
+// concurrently-running automation (see runAutomation), each running its own
+// pollRealtimeMode poll loop against the same outbox. Without process-wide
+// serialization here, two Uplinks could both read the same unretired row
+// before either retired it and both deliver it — a duplicate reliable
+// event reaching the server. DrainToLegacy rules that out: every row's
+// read-sink-retire sequence runs under legacyDrainMu (see
+// drainOneToLegacy), held for exactly that one row, so a second concurrent
+// caller blocks until the first has fully retired its row and always sees a
+// fresh Pending()/OverflowPending() read with that row already gone.
+//
+// The same lock also closes the narrower switch-back race the reviewer
+// flagged: connectAndServe acquires legacyDrainMu around clearing
+// serverDisabled and its initial post-hello replayPending call (see
+// connectAndServe), so a drain in flight when the server re-accepts
+// realtime either fully retires its current row before that replay reads
+// the outbox (the row is already gone by then — no duplicate), or blocks
+// until the replay (which reads every row still sitting in the outbox at
+// that instant) has already committed to delivering them over realtime —
+// drainOneToLegacy then observes ServerDisabled() flip false on its next
+// iteration and stops without ever touching those rows itself. Either way a
+// given row is delivered exactly once, by exactly one of the two paths.
+//
+// The lock is held per-row rather than across the whole call so a
+// reconnecting Client is never blocked behind an entire backlog — only
+// behind whichever single row happens to be mid-flight.
+func (c *Client) DrainToLegacy(ctx context.Context, sink LegacySink) {
+	if c.cfg.Outbox == nil {
+		return
+	}
+	for {
+		if done := c.drainOneToLegacy(ctx, sink); done {
+			return
+		}
+	}
+}
+
+// drainOneToLegacy drains at most one row (see DrainToLegacy) under
+// legacyDrainMu. It reports true when the caller should stop: nothing left
+// to drain, sink asked to stop, a store error, or the server has
+// re-accepted realtime since the last iteration.
+func (c *Client) drainOneToLegacy(ctx context.Context, sink LegacySink) bool {
+	c.legacyDrainMu.Lock()
+	defer c.legacyDrainMu.Unlock()
+
+	if !c.ServerDisabled() {
+		// Realtime has resumed (or was never disabled to begin with, for a
+		// stray call): every row still sitting in the outbox at this
+		// instant is guaranteed to be delivered by connectAndServe's
+		// post-hello replayPending instead, which holds this same lock
+		// while doing so — see DrainToLegacy's doc comment. Stopping here
+		// cannot drop or duplicate anything.
+		return true
+	}
+
+	store := c.cfg.Outbox
+	pending, err := store.Pending(ctx, c.cfg.Space)
+	if err != nil {
+		c.cfg.Logf("realtime: legacy drain: read outbox: %v", err)
+		return true
+	}
+	if len(pending) > 0 {
+		item := pending[0]
+		if !sink(item.Kind, item.Body) {
+			return true
+		}
+		if err := store.Ack(ctx, c.cfg.Space, item.DeviceSeq); err != nil {
+			c.cfg.Logf("realtime: legacy drain: ack seq %d: %v", item.DeviceSeq, err)
+			return true
+		}
+		return false
+	}
+
+	overflow, err := store.OverflowPending(ctx, c.cfg.Space)
+	if err != nil {
+		c.cfg.Logf("realtime: legacy drain: read overflow: %v", err)
+		return true
+	}
+	if len(overflow) == 0 {
+		return true
+	}
+	ov := overflow[0]
+	if !sink(ov.Kind, ov.Body) {
+		return true
+	}
+	if err := store.DeleteOverflow(ctx, ov.ID); err != nil {
+		c.cfg.Logf("realtime: legacy drain: delete overflow id %d: %v", ov.ID, err)
+		return true
+	}
+	return false
+}
+
 // MetricsThrottled reports whether the metric batcher is currently in its
 // throttled cadence (SPEC.md section 7's command{throttle}/{resume_rate}).
 func (c *Client) MetricsThrottled() bool { return c.metrics.Throttled() }
@@ -183,6 +311,19 @@ type TaskEvent struct {
 // its device_seq) and attempts immediate delivery if connected. The event
 // survives in the outbox until acknowledged, across any number of
 // reconnects or process restarts.
+//
+// outbox.ErrOverflowed is deliberately not surfaced as an error: per its own
+// doc comment it is informational, not a failure — the event is already
+// durably persisted (into outbox_overflow instead of outbox) by the time
+// Enqueue returns it, and "[c]allers must not retry or reroute on this
+// error". uplink.Uplink.sendReliable's own doc comment already assumes this
+// ("ordinary outbox-full backpressure durably overflows inside Enqueue and
+// never reaches here"): if this returned ErrOverflowed as a plain error,
+// sendReliable's persist-failure branch would re-attempt the exact same
+// Enqueue call every flush tick until capacity frees, each attempt durably
+// creating ANOTHER outbox_overflow row for the same logical event (Enqueue
+// does not deduplicate) — unbounded duplicate rows in an uncapped table,
+// only one of which is ever promoted and delivered.
 func (c *Client) SendTaskEvent(ev TaskEvent) error {
 	_, err := c.cfg.Outbox.Enqueue(context.Background(), c.cfg.Space, wire.TypeTaskEvent, func(seq int64) (json.RawMessage, error) {
 		body := wire.TaskEventBody{
@@ -202,7 +343,7 @@ func (c *Client) SendTaskEvent(ev TaskEvent) error {
 		}
 		return json.Marshal(body)
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, outbox.ErrOverflowed) {
 		return err
 	}
 	c.wakeSender()
@@ -219,7 +360,8 @@ type MessageEvent struct {
 	AutomationID string
 }
 
-// SendMessageEvent durably enqueues a message event; see SendTaskEvent.
+// SendMessageEvent durably enqueues a message event; see SendTaskEvent,
+// including why outbox.ErrOverflowed is not surfaced as an error here.
 func (c *Client) SendMessageEvent(ev MessageEvent) error {
 	_, err := c.cfg.Outbox.Enqueue(context.Background(), c.cfg.Space, wire.TypeMessageEvent, func(seq int64) (json.RawMessage, error) {
 		id := ev.MessageID
@@ -240,7 +382,7 @@ func (c *Client) SendMessageEvent(ev MessageEvent) error {
 		}
 		return json.Marshal(body)
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, outbox.ErrOverflowed) {
 		return err
 	}
 	c.wakeSender()
@@ -381,12 +523,6 @@ func (c *Client) connectAndServe() error {
 	}
 	heartbeatInterval := time.Duration(accept.HeartbeatIntervalMS) * time.Millisecond
 
-	// A completed hello is proof the server currently accepts realtime,
-	// whether or not this connection had ever previously been rejected with
-	// ErrRealtimeDisabled — clear it so pollRealtimeMode's caller resumes
-	// realtime routing for new events immediately.
-	c.serverDisabled.Store(false)
-
 	c.mu.Lock()
 	c.conn = conn
 	c.connected = true
@@ -399,7 +535,20 @@ func (c *Client) connectAndServe() error {
 		c.mu.Unlock()
 	}()
 
+	// A completed hello is proof the server currently accepts realtime,
+	// whether or not this connection had ever previously been rejected with
+	// ErrRealtimeDisabled — clear it so pollRealtimeMode's caller resumes
+	// realtime routing for new events immediately, and replay everything
+	// still sitting in the outbox over this connection.
+	//
+	// Both happen under legacyDrainMu — the same lock DrainToLegacy holds
+	// per row — so a legacy drain in flight when the server re-accepts
+	// realtime cannot race this replay onto the same row: see
+	// DrainToLegacy's doc comment for the full invariant.
+	c.legacyDrainMu.Lock()
+	c.serverDisabled.Store(false)
 	c.replayPending(ctx, conn)
+	c.legacyDrainMu.Unlock()
 
 	frames := make(chan frameMsg, 8)
 	pings := make(chan struct{}, 8)
