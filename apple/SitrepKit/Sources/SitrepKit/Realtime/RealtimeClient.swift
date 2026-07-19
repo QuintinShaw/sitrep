@@ -104,9 +104,12 @@ public actor RealtimeClient {
     /// Number of consecutive malformed frames after which the connection is
     /// torn down and re-established (circuit breaker).
     private let malformedFrameCircuitBreaker = 5
-    /// Distinguishes which `runLoop` invocation may clear `runTask` on
-    /// exit, so a stale loop finishing after a stop()/start() cycle can't
-    /// clobber the newer loop's handle.
+    /// Distinguishes which `runLoop` invocation currently owns the
+    /// connection resources (`runTask`, `socket`, `leaseRenewalTask`,
+    /// `watchdogTask`). A stale generation — a loop still unwinding after a
+    /// stop()/start() cycle on the same instance — must neither clear the
+    /// newer loop's task handle nor tear down or replace its connection
+    /// resources (see `ConnectionTeardownPolicy`).
     private var runGeneration = 0
 
     private let phaseContinuation: AsyncStream<Phase>.Continuation
@@ -178,7 +181,7 @@ public actor RealtimeClient {
         var terminal = false
         while !Task.isCancelled {
             do {
-                try await connectOnce()
+                try await connectOnce(generation: generation)
             } catch is CancellationError {
                 break
             } catch {
@@ -217,7 +220,7 @@ public actor RealtimeClient {
 
     // MARK: - One connection's lifetime
 
-    private func connectOnce() async throws {
+    private func connectOnce(generation: Int) async throws {
         phase = .connecting
         consecutiveMalformedFrames = 0
         var request = URLRequest(url: configuration.url)
@@ -227,11 +230,15 @@ public actor RealtimeClient {
         let socket = URLSession.shared.webSocketTask(with: request)
         self.socket = socket
         socket.resume()
-        defer { teardownConnection() }
+        // A stale generation's deferred teardown (this connectOnce resuming
+        // from suspension after a stop()/start() cycle) must not cancel the
+        // NEWER generation's socket/lease/watchdog. It still closes its own
+        // socket, which it holds by reference.
+        defer { teardownConnection(requestedBy: generation, ownSocket: socket) }
 
         phase = .handshaking
         let accept = try await performHandshake(on: socket)
-        startHeartbeat(on: socket, intervalMs: accept.heartbeatIntervalMs)
+        startHeartbeat(on: socket, intervalMs: accept.heartbeatIntervalMs, generation: generation)
 
         let subscribeID = newEnvelopeID()
         try await sendFrame(
@@ -248,7 +255,7 @@ public actor RealtimeClient {
             throw RealtimeClientError.protocolViolation("expected subscribe ack with lease, got \(ackFrame)")
         }
         phase = .subscribed
-        scheduleLeaseRenewal(expiresAt: lease.expiresAt, on: socket)
+        scheduleLeaseRenewal(expiresAt: lease.expiresAt, on: socket, generation: generation)
 
         let lastRevision = gate.state.revision
         gate.beganResume(lastRevision: lastRevision)
@@ -258,11 +265,20 @@ public actor RealtimeClient {
 
         while !Task.isCancelled {
             let frame = try await receiveFrame(on: socket)
-            try await dispatch(frame, on: socket)
+            try await dispatch(frame, on: socket, generation: generation)
         }
     }
 
-    private func teardownConnection() {
+    /// Tears down the shared connection resources — but only when the
+    /// requesting generation still owns them (`requestedBy: nil` is the
+    /// unconditional form used by `stop()`). A stale generation's deferred
+    /// call limits itself to closing the socket it created (`ownSocket`),
+    /// leaving the newer generation's resources untouched.
+    private func teardownConnection(requestedBy generation: Int? = nil, ownSocket: URLSessionWebSocketTask? = nil) {
+        guard ConnectionTeardownPolicy.shouldTearDownShared(requestedBy: generation, current: runGeneration) else {
+            ownSocket?.cancel(with: .normalClosure, reason: nil)
+            return
+        }
         socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
         leaseRenewalTask?.cancel()
@@ -299,7 +315,7 @@ public actor RealtimeClient {
 
     // MARK: - Frame dispatch (post-handshake, post-subscribe)
 
-    private func dispatch(_ frame: RealtimeFrame, on socket: URLSessionWebSocketTask) async throws {
+    private func dispatch(_ frame: RealtimeFrame, on socket: URLSessionWebSocketTask, generation: Int) async throws {
         // §6.2: while a chunked snapshot is in flight, only further snapshot
         // chunks (and ping/pong, which never reach dispatch) are legal on
         // this connection. Anything else is a malformed sequence: drop the
@@ -344,7 +360,7 @@ public actor RealtimeClient {
             stateContinuation.yield(gate.state)
         case .ack(let env):
             if let lease = env.body.lease {
-                scheduleLeaseRenewal(expiresAt: lease.expiresAt, on: socket)
+                scheduleLeaseRenewal(expiresAt: lease.expiresAt, on: socket, generation: generation)
             }
         case .error(let env):
             try await handleError(env.body, on: socket)
@@ -391,7 +407,11 @@ public actor RealtimeClient {
     /// Renews at 1/3 of the window remaining before `expiresAt`, as
     /// instructed. Rescheduled every time we learn a fresh `expiresAt` (the
     /// initial subscribe ack, or any subsequent renew ack) — see `dispatch`.
-    private func scheduleLeaseRenewal(expiresAt: Int, on socket: URLSessionWebSocketTask) {
+    /// A stale generation (its connection already superseded by a
+    /// stop()/start() cycle) must not replace the current generation's
+    /// renewal task.
+    private func scheduleLeaseRenewal(expiresAt: Int, on socket: URLSessionWebSocketTask, generation: Int) {
+        guard generation == runGeneration else { return }
         leaseRenewalTask?.cancel()
         let window = max(expiresAt - nowMs(), 0)
         let fireAfterMs = window - window / 3
@@ -408,7 +428,8 @@ public actor RealtimeClient {
 
     // MARK: - Heartbeat (§9.3)
 
-    private func startHeartbeat(on socket: URLSessionWebSocketTask, intervalMs: Int) {
+    private func startHeartbeat(on socket: URLSessionWebSocketTask, intervalMs: Int, generation: Int) {
+        guard generation == runGeneration else { return }
         watchdogTask?.cancel()
         lastInboundAt = nowMs()
         watchdogTask = Task { [weak self] in
@@ -504,6 +525,25 @@ public actor RealtimeClient {
 
     private func nowMs() -> Int { Int(Date().timeIntervalSince1970 * 1000) }
     private func newEnvelopeID() -> String { UUID().uuidString }
+}
+
+/// Pure decision logic for generation-scoped teardown of the shared
+/// connection resources (`socket`/`leaseRenewalTask`/`watchdogTask`),
+/// extracted so the guard itself is directly unit-testable without a live
+/// transport (`RealtimeGenerationTests`).
+enum ConnectionTeardownPolicy {
+    /// - `requestedBy == nil`: the unconditional form (`stop()`); always
+    ///   tears down.
+    /// - `requestedBy == current`: the owning generation's own teardown;
+    ///   proceeds.
+    /// - `requestedBy < current`: a stale generation unwinding after a
+    ///   stop()/start() cycle; it must NOT touch the newer generation's
+    ///   shared resources (it may still close the socket it created and
+    ///   holds by reference).
+    static func shouldTearDownShared(requestedBy generation: Int?, current: Int) -> Bool {
+        guard let generation else { return true }
+        return generation == current
+    }
 }
 
 public extension RealtimeClient.Phase {
