@@ -134,6 +134,10 @@ function validateHelloBody(body: Record<string, unknown>): ValidationResult<Hell
     if (!body.protocol_versions.every((n) => Number.isInteger(n) && (n as number) >= 1)) {
       return fail("malformed", "hello offer: invalid protocol_versions entry");
     }
+    if (new Set(body.protocol_versions).size !== body.protocol_versions.length) {
+      // Mirrors the schema's uniqueItems: true on protocol_versions.
+      return fail("malformed", "hello offer: protocol_versions must not contain duplicates");
+    }
     if (body.capabilities !== undefined) {
       if (!Array.isArray(body.capabilities) || !body.capabilities.every((c) => typeof c === "string" && c.length <= 64)) {
         return fail("malformed", "hello offer: invalid capabilities");
@@ -268,6 +272,10 @@ function validateSubscribeLikeBody(body: Record<string, unknown>, label: string)
   if (body.topics !== undefined) {
     if (!Array.isArray(body.topics) || !body.topics.every((t) => SUBSCRIBE_TOPICS.includes(t as string))) {
       return fail("malformed", `${label}: invalid topics`);
+    }
+    if (new Set(body.topics).size !== body.topics.length) {
+      // Mirrors the schema's uniqueItems: true on topics.
+      return fail("malformed", `${label}: topics must not contain duplicates`);
     }
   }
   return ok(body as unknown as SubscribeBody);
