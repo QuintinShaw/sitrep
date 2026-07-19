@@ -98,6 +98,15 @@ export class SpaceHub extends DurableObject<Env> {
    * (see logAlways) — only routine per-frame hot-path logging is sampled. */
   logSampler: (n: number) => boolean = (n) => n % 100 === 0;
 
+  /** Every logAlways() (100%-sampled, security/error tier) event recorded
+   * by this DO instance, newest last. In-memory only, capped, and never
+   * persisted or read by production code — it exists purely so
+   * vitest-pool-workers tests can assert a log fired (e.g. on
+   * supersession) via `runInDurableObject(stub, (i) => (i as any).
+   * securityEventLog)`, since console output can't be captured across the
+   * workerd/vitest process boundary. */
+  private securityEventLog: Array<{ event: string; data: Record<string, unknown> }> = [];
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Answers a bare "ping" text frame with "pong" entirely inside the
@@ -449,6 +458,7 @@ export class SpaceHub extends DurableObject<Env> {
 
     // SPEC.md section 9.4: the new connection completing hello supersedes
     // any other open connection already authenticated for this device_id.
+    const newSessionId = crypto.randomUUID();
     for (const other of this.ctx.getWebSockets(att.deviceId)) {
       if (other === ws) continue;
       const otherAtt = other.deserializeAttachment();
@@ -458,12 +468,22 @@ export class SpaceHub extends DurableObject<Env> {
           message: "device completed hello on a newer connection",
           ...ERROR_SEMANTICS.superseded,
         });
+        // Product invariant 5: superseded must never be silent — it is a
+        // security-relevant event (possible credential/session reuse), so it
+        // always logs at 100% via logAlways, independent of the wire reply
+        // above (which must stay byte-identical for the superseded peer).
+        this.logAlways("superseded", {
+          device_id: att.deviceId,
+          role: att.role,
+          superseded_session_id: otherAtt.sessionId,
+          superseding_session_id: newSessionId,
+        });
         other.close(1008, "superseded");
       }
     }
 
     att.helloDone = true;
-    att.sessionId = crypto.randomUUID();
+    att.sessionId = newSessionId;
     ws.serializeAttachment(att);
 
     this.send(ws, "hello", {
@@ -977,6 +997,11 @@ export class SpaceHub extends DurableObject<Env> {
 
   private logAlways(event: string, data: Record<string, unknown>): void {
     console.log(JSON.stringify({ level: "error", event, ...data, ts: Date.now() }));
+    this.securityEventLog.push({ event, data });
+    // Bounded so a pathological run can't grow this without limit; recent
+    // history is all tests need, and this is never persisted or read by
+    // production logic.
+    if (this.securityEventLog.length > 200) this.securityEventLog.shift();
   }
 }
 
