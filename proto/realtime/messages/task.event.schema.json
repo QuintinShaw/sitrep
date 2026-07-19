@@ -28,18 +28,17 @@
           "$ref": "../common.schema.json#/$defs/unix_ms_timestamp",
           "description": "When this transition actually happened on the source device, independent of envelope.ts (send time)."
         },
-        "title": { "type": "string", "maxLength": 200 },
+        "title": { "$ref": "../common.schema.json#/$defs/free_text" },
         "percent": {
           "type": "integer",
           "description": "Present when kind is 'progress'.",
           "minimum": 0,
           "maximum": 100
         },
-        "step": { "type": "string", "maxLength": 500 },
+        "step": { "$ref": "../common.schema.json#/$defs/free_text" },
         "message": {
-          "type": "string",
-          "description": "Present when kind is 'done' or 'failed'.",
-          "maxLength": 500
+          "$ref": "../common.schema.json#/$defs/free_text",
+          "description": "Present when kind is 'done' or 'failed'."
         },
         "display": { "$ref": "../common.schema.json#/$defs/display_hints" }
       },

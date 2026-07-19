@@ -1,0 +1,14 @@
+{
+  "type": "command",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X3H0",
+  "ts": 1752480020000,
+  "body": {
+    "command_id": "cmd-pause-extra-field",
+    "origin": "viewer",
+    "issued_by_device_id": "iphone-quintin-01",
+    "action": "pause",
+    "task_id": "run-2f9a",
+    "automation_id": "auto-disk-watch",
+    "ttl_ms": 30000
+  }
+}

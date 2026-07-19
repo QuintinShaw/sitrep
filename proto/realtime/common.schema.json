@@ -55,6 +55,16 @@
       "type": "string",
       "enum": ["info", "warn", "error"]
     },
+    "free_text": {
+      "type": "string",
+      "description": "Unified cap for user-visible free text: task title, step, completion message, and message text. The cap (2048 characters, so at most ~8 KiB of UTF-8) guarantees any single record built from these fields serializes far below the 64 KiB frame limit (SPEC.md section 11) - a single record can never exceed a frame.",
+      "maxLength": 2048
+    },
+    "label_text": {
+      "type": "string",
+      "description": "Unified cap for short labels and names: metric label, automation name.",
+      "maxLength": 256
+    },
     "task_kind": {
       "type": "string",
       "description": "Lifecycle phase this task.event body reports. Named distinctly from the proto/SPEC.md stdout verbs (task.start/progress/step/done/fail) because this is a post-processed sync-layer event, not a raw process line.",
@@ -78,11 +88,11 @@
       "properties": {
         "task_id": { "$ref": "#/$defs/task_id" },
         "device_id": { "$ref": "#/$defs/device_id" },
-        "title": { "type": "string", "maxLength": 200 },
+        "title": { "$ref": "#/$defs/free_text" },
         "state": { "type": "string", "enum": ["running", "done", "failed"] },
         "percent": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "step": { "type": "string", "maxLength": 500 },
-        "message": { "type": "string", "maxLength": 500 },
+        "step": { "$ref": "#/$defs/free_text" },
+        "message": { "$ref": "#/$defs/free_text" },
         "updated_at": { "$ref": "#/$defs/unix_ms_timestamp" },
         "display": { "$ref": "#/$defs/display_hints" }
       }
@@ -95,7 +105,7 @@
       "properties": {
         "metric_id": { "$ref": "#/$defs/metric_id" },
         "value": { "type": "string", "maxLength": 256 },
-        "label": { "type": "string", "maxLength": 100 },
+        "label": { "$ref": "#/$defs/label_text" },
         "ts": { "$ref": "#/$defs/unix_ms_timestamp" },
         "display": { "$ref": "#/$defs/display_hints" },
         "target": { "type": "string", "maxLength": 64 },
@@ -112,7 +122,7 @@
       "required": ["automation_id", "name", "executor_kind", "schedule", "state"],
       "properties": {
         "automation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "name": { "$ref": "#/$defs/label_text", "type": "string", "minLength": 1 },
         "executor_kind": { "type": "string", "enum": ["script", "agent", "hybrid"] },
         "schedule": {
           "type": "object",
@@ -136,7 +146,7 @@
         "message_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "device_id": { "$ref": "#/$defs/device_id" },
         "level": { "$ref": "#/$defs/message_level" },
-        "text": { "type": "string", "maxLength": 1000 },
+        "text": { "$ref": "#/$defs/free_text" },
         "occurred_at": { "$ref": "#/$defs/unix_ms_timestamp" }
       }
     },

@@ -241,6 +241,14 @@ with special provenance rules:
 - Its body carries **no `device_id` and no `device_seq`**: since the server
   mints it, there is no uplink to deduplicate. Its identity IS the
   `space_revision` slot it occupies.
+- Minting a `config.event` and incrementing `space_revision` MUST be a
+  **single durable transaction**: the event exists if and only if its
+  revision slot does. This gives `config.event` a duplicate-resistance
+  guarantee equivalent to the `(device_id, device_seq)` deduplication of
+  uplinked events — in particular, retries of the HTTP control-plane
+  operation that triggered the change MUST NOT produce duplicate
+  `config.event`s (the control plane deduplicates its own retries before
+  minting).
 - It is never acked by anyone and never sits in a resend queue.
 - Like every reliable event, it is persisted and increments
   `space_revision` by exactly 1 (§6.1), and reaches viewers inside `delta`
@@ -276,7 +284,11 @@ sent in two situations:
 - **Live**: each time the server applies one reliable event, taking the
   space from revision `R-1` to `R`, it MUST send a single-event
   `delta{from_revision: R-1, to_revision: R, events: [e]}` to every viewer
-  holding an active interest lease on the space (§7).
+  **connection that is delta-eligible**: it holds an active interest lease
+  (§7) AND has completed the full `hello → subscribe → resume` sequence,
+  including having been sent its resume reply (§6.3). The server MUST NOT
+  send any live delta on a connection before that connection's resume
+  reply.
 - **Catch-up**: as the reply to `resume` (§6.3), covering the range
   `(from_revision, to_revision]`.
 
@@ -307,7 +319,13 @@ exceeds the frame limit, it is chunkable:
   consecutively from 1; `final: true` marks the last chunk. A single-chunk
   snapshot is `part: 1, final: true`.
 - Chunks of one snapshot MUST be sent consecutively, in order, on the same
-  connection, with no other envelope interleaved between them.
+  connection. **While a chunked snapshot is in flight, the server MUST
+  defer every other outbound envelope on that connection — including
+  control-plane `ack`s — until after the `final` chunk**; only the
+  `ping`/`pong` heartbeat text frames (§9.3), which are not envelopes, may
+  interleave. A viewer that receives any non-`ping`/`pong` envelope
+  between chunks MUST treat it as a malformed sequence and MAY close the
+  connection and reconnect.
 - The receiver concatenates the four arrays across chunks and MUST NOT
   apply anything until the `final` chunk has arrived. If the connection
   drops mid-snapshot, the partial chunks are discarded and the viewer
@@ -323,13 +341,34 @@ exceeds the frame limit, it is chunkable:
 ### 6.3 Client resume flow (step by step)
 
 The mandatory viewer connection sequence is **`hello` → `subscribe` →
-`resume`**: subscribe establishes the interest lease first, so that live
-single-event deltas start flowing immediately; resume then establishes the
-baseline. A viewer MUST NOT send `resume` before it has sent `subscribe`
-on the same connection; a server receiving them out of order MUST reject
-the early `resume` with `error{code: malformed, retryable: true, fatal:
-false}`. Within one connection the transport delivers messages in order
-(§11), which this flow relies on.
+`resume`**, and `resume` is **required on every connection**, not
+optional: a connection — including a new connection that supersedes an
+old one (§9.4) — becomes **delta-eligible** only once it has completed
+all three steps in order and the server has sent its resume reply. A
+viewer MUST NOT send `resume` before it has sent `subscribe` on the same
+connection; a server receiving them out of order MUST reject the early
+`resume` with `error{code: malformed, retryable: true, fatal: false}`.
+Within one connection the transport delivers messages in order (§11),
+which this flow relies on.
+
+The gate has a server side and a defensive viewer side:
+
+- **Server gate**: the server MUST NOT send any live delta on a
+  connection until it has sent that connection's resume reply. The resume
+  reply is therefore always the **first** delta-family envelope (`delta`
+  or `snapshot`) the server sends on a connection.
+- **Viewer defense**: a viewer MUST discard any `delta` received on a
+  connection before that connection's resume reply. This is provably
+  safe, not merely heuristic: frames on one connection are delivered in
+  order (§11), so a delta that arrives before the reply was necessarily
+  *sent* before the server computed the reply — the reply's
+  revision therefore already covers that delta's content. (This rule is
+  pure defense-in-depth against a non-conformant server; a conformant
+  server never triggers it.)
+
+Together these remove any window in which a viewer would have to evaluate
+a delta against an uninitialized local revision: `C` (below) is defined
+by the resume reply, and no delta is ever evaluated before it exists.
 
 `resume` MUST produce **exactly one reply** — never silence. The complete
 decision table, for `resume{last_revision: N}` against the space's current
@@ -348,13 +387,13 @@ reply.
 
 After the reply, the viewer maintains a local current revision `C`
 (initialized to the reply's `revision`/`to_revision`) and applies every
-subsequently received `delta` by these rules — this is what makes the
-race between the resume reply and live deltas harmless:
+subsequently received `delta` by these rules:
 
 - `from_revision < C`: **discard silently.** The delta's content is
-  already covered by the resume reply or an earlier applied delta. (This
-  absorbs any live delta emitted between subscribe taking effect and the
-  resume reply being computed.)
+  already covered by the resume reply or an earlier applied delta (the
+  same in-order argument as the pre-reply discard rule above: anything
+  the server sent with an older `from_revision` reflects state the viewer
+  has already absorbed).
 - `from_revision == C`: **apply**, then set `C = to_revision`.
 - `from_revision > C`: **revision gap** — one or more deltas were lost
   (which a transport with in-order lossless frames should not produce, but
@@ -369,22 +408,30 @@ Worked example (executable versions:
 1. Viewer connects: `hello{stage: offer, role: viewer}` /
    `hello{stage: accept}`.
 2. Viewer sends `subscribe`; server replies `ack{lease: {expires_at}}`.
-   Live single-event deltas MAY start arriving from this moment.
+   The lease is now active, but this connection is **not yet
+   delta-eligible**: the server sends no live delta on it yet, even if
+   reliable events are being applied to the space right now.
 3. Viewer sends `resume{last_revision: 126}`.
 4. Server has revisions 127–128 retained → replies
-   `delta{from_revision: 126, to_revision: 128, events: [2 events]}`.
-   Viewer applies it, `C = 128`. (Had the retention window not reached
-   back to 126, the reply would instead have been
+   `delta{from_revision: 126, to_revision: 128, events: [2 events]}` —
+   the first delta-family envelope on this connection. Viewer applies it,
+   `C = 128`; the connection is now delta-eligible. (Had the retention
+   window not reached back to 126, the reply would instead have been
    `snapshot{revision: 128, part: 1, final: true, ...}` and the viewer
    would discard its stale local state; had the viewer sent
-   `last_revision: 128`, the reply would have been the empty delta.)
+   `last_revision: 128`, the reply would have been the empty delta. Any
+   reliable events applied between steps 2 and 4 are simply included in
+   the reply itself — the reply is computed against the space's current
+   revision at reply time.)
 5. A source reports progress; the server applies it (revision 129) and
    sends `delta{from_revision: 128, to_revision: 129, events: [1 event]}`
-   to every active lease holder. `from_revision == C`, so the viewer
-   applies it, `C = 129`.
+   to every delta-eligible lease-holding connection. `from_revision == C`,
+   so the viewer applies it, `C = 129`.
 6. Any duplicate or late delta with `from_revision < 129` is discarded;
    any future delta with `from_revision > C` triggers a fresh
-   `resume{last_revision: C}`.
+   `resume{last_revision: C}` (and while that re-resume is outstanding,
+   the same pre-reply discard rule applies to any delta that races the
+   new reply).
 
 ### 6.4 Deterministic event folding
 
@@ -473,6 +520,14 @@ of spuriously firing a throttle notification.
   would break that viewer's revision continuity (§6.3) and force it into
   a resume loop.
 
+A lease's survival across disconnects and connection supersession (§9.4)
+affects **only** this section's throttle-edge accounting: in particular,
+a supersession MUST NOT cause a `throttle`/`resume_rate` emission, since
+the device's lease — and therefore the space's count — is unchanged by
+it. Lease survival does NOT make any connection eligible to receive
+deltas: delta eligibility is strictly per connection and requires that
+connection's own completed `hello → subscribe → resume` sequence (§6.3).
+
 The server tracks **one lease-count per space**: the number of devices
 currently holding an unexpired lease. A device with multiple simultaneous
 connections (§9.4) contributes exactly once. On every transition of that
@@ -523,11 +578,15 @@ Per-action required-field matrix — the command names the exact object it
 operates on, aligning with the HTTP control surface
 (`POST /v2/tasks/:id/commands`):
 
-| `action` | `origin` | required object field |
-|---|---|---|
-| `pause`, `resume`, `stop` | `viewer` | `task_id` (the task run to act on) |
-| `run_now` | `viewer` | `automation_id` (the automation to trigger) |
-| `throttle`, `resume_rate` | `server` | none (device-level, not object-level) |
+| `action` | `origin` | required object field | forbidden object field |
+|---|---|---|---|
+| `pause`, `resume`, `stop` | `viewer` | `task_id` (the task run to act on) | `automation_id` |
+| `run_now` | `viewer` | `automation_id` (the automation to trigger) | `task_id` |
+| `throttle`, `resume_rate` | `server` | none (device-level, not object-level) | both `task_id` and `automation_id` |
+
+The forbidden column is enforced by schema (`not`/`required` patterns in
+`messages/command.schema.json`): a command carrying an object field its
+action does not use is `malformed`, never silently tolerated.
 
 Other fields:
 
@@ -592,6 +651,11 @@ server's `hello{stage: accept}` (server → client).
 
 The handshake is strictly sequential:
 
+- A client may only ever send `hello{stage: "offer"}`; `stage: "accept"`
+  belongs exclusively to the server. If the server receives a
+  `hello{stage: "accept"}` from a client — at any point in the
+  connection's life — it MUST treat it as a handshake violation: reply
+  `error{code: hello_required, fatal: true}` and close the connection.
 - After sending its offer, the client **MUST NOT send any other envelope
   until it has received and validated the server's accept.** There is no
   pipelining of `subscribe`/`resume`/events behind the offer.
@@ -672,7 +736,15 @@ for the same authenticated `device_id`:
 - Interest leases are unaffected: they are held per device (§7), so
   supersession neither ends a lease nor double-counts it — a device
   briefly holding two open connections contributes exactly one lease to
-  the space's count.
+  the space's count, and the supersession itself MUST NOT trigger a
+  `throttle`/`resume_rate` emission (§7).
+- Lease survival does NOT carry delta eligibility across connections.
+  The new connection MUST run the full `hello → subscribe → resume`
+  sequence (§6.3) before it receives any delta — for a viewer, `resume`
+  is required on every connection — and the viewer's local revision `C`
+  is re-established from the **new** connection's resume reply. No
+  cross-connection inheritance of `C` (or of any in-flight snapshot
+  chunks or pending replies) is defined by this protocol.
 
 A client that receives `superseded` after itself opening a new connection
 treats it as confirmation the new connection won. A client that receives
@@ -713,7 +785,7 @@ sent by a role not listed below MUST be rejected with
 
 | `type` | source may send | viewer may send |
 |---|---|---|
-| `hello` | yes (as offer) | yes (as offer) |
+| `hello` | yes (`stage: "offer"` only — a client-sent `stage: "accept"` is a handshake violation answered with `hello_required` + close, §9.1) | yes (`stage: "offer"` only, same rule) |
 | `resume` | no | yes |
 | `snapshot` | no (server-only) | no (server-only) |
 | `delta` | no (server-only) | no (server-only) |
@@ -753,6 +825,16 @@ not restricted by it.
   A receiver that gets an oversized frame MUST reject it with
   `error{code: frame_too_large, retryable: true}` and MUST NOT attempt to
   parse it.
+- Every free-text field is capped by the shared `$defs` in
+  `common.schema.json` (`free_text` ≤ 2048 characters for task title,
+  step, completion message, and message text; `label_text` ≤ 256 for
+  metric labels and automation names), and every id/value field has its
+  own cap. These caps guarantee that any **single** record — a
+  `task_state`, `message_record`, `metric_sample`, `automation_state`, or
+  one delta event — serializes far below the 64 KiB frame limit. A
+  single record can therefore never exceed a frame by itself, and the
+  split mechanisms above (snapshot chunks, chained deltas) always have a
+  valid record/event boundary to split on.
 - Batch item caps: `metric.frame.body.metrics` MUST NOT exceed 64 entries;
   `delta.body.events` and `ack.body.acked` have no protocol-fixed cap but
   are bounded in practice by the 64 KiB frame limit. A receiver that gets a
@@ -889,8 +971,17 @@ from `server/`, `daemon/`, or `apple/`) that:
    schema and the specific schema selected by its own `type` field.
 3. Asserts every fixture under `fixtures/invalid/` is rejected — by one of
    those two schemas, or by the client-authorization matrix (§10.1),
-   which the script mirrors.
-4. Exits non-zero if any fixture produces an unexpected result.
+   which the script mirrors (including the client-may-only-send-offer and
+   client-may-only-send-origin-viewer rules).
+4. Checks semantic invariants JSON Schema cannot express: delta revision
+   arithmetic (`to_revision − from_revision == events.length`) on every
+   delta fixture, and — per scenario directory, in filename order —
+   consecutive-delta chaining, snapshot chunk runs (same revision,
+   consecutive parts from 1, nothing interleaved, `final: true` closing
+   the run), and per-device `device_seq` monotonicity (equal values
+   allowed, as retransmissions).
+5. Exits non-zero if any fixture or invariant produces an unexpected
+   result.
 
 Fixtures come in two forms. A bare envelope object is schema-checked
 only. A wrapper of the form

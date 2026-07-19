@@ -81,6 +81,43 @@ Applied before the 1.0.0 freeze was published; the version stays 1.0.0.
   with a live single-event delta; the revision-gap scenario now shows a
   two-chunk snapshot; new `duplicate-connection-supersede` scenario.
 
+### Pre-freeze revisions, round 2 (Opus re-review rulings)
+
+- Connection-level delta gating: every connection (including a
+  superseding one) must complete hello → subscribe → resume before it is
+  delta-eligible; resume is now required per connection; the server sends
+  no live delta before that connection's resume reply (always the first
+  delta-family envelope on a connection); viewers defensively discard any
+  pre-reply delta, justified by in-order delivery rather than a causal
+  heuristic. Lease survival across supersession affects only
+  throttle-edge accounting (no spurious throttle/resume_rate) and never
+  confers delta eligibility; the local revision is always re-established
+  from the new connection's resume reply, with no cross-connection
+  inheritance.
+- Chunked-snapshot server obligation: while chunks are in flight, all
+  other outbound envelopes on that connection (including acks) are
+  deferred until after the final chunk; only ping/pong may interleave,
+  and a viewer treats any other interleaved envelope as a malformed
+  sequence.
+- Clients may only send hello{stage: offer}; a client-sent accept is
+  answered with hello_required and a close (matrix, validator rule, and
+  invalid fixture added).
+- config.event minting and its revision increment are a single durable
+  transaction, giving duplicate-resistance equivalent to
+  (device_id, device_seq) dedup; HTTP control-plane retries cannot mint
+  duplicates.
+- command field exclusivity enforced by schema: pause/resume/stop forbid
+  automation_id, run_now forbids task_id, throttle/resume_rate forbid
+  both (invalid fixtures added).
+- Unified free-text caps in common $defs (free_text ≤ 2048 chars for
+  title/step/message/text, label_text ≤ 256 for labels/names), with the
+  framing section noting these caps make a single record exceeding a
+  frame impossible.
+- Validator now asserts sequence invariants over scenario directories:
+  delta arithmetic, delta chaining, snapshot chunk-run integrity, and
+  per-device device_seq monotonicity — still zero dependencies beyond
+  the pinned ajv.
+
 ### Initial content
 
 - Defines the complete v1 message set: `hello`, `resume`, `snapshot`,

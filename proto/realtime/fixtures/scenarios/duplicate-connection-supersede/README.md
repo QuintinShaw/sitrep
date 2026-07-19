@@ -28,9 +28,15 @@ with `error{code: superseded}`. See SPEC.md §9.4.
   replies, live deltas - routes to C2, the device's most recent connection,
   never to C1.
 - Interest leases are held per DEVICE, not per connection (SPEC.md §7):
-  the supersession neither ends nor double-counts the device's lease. A
-  viewer briefly holding two open connections still contributes exactly one
-  lease to the space's count.
+  the supersession neither ends nor double-counts the device's lease, and
+  MUST NOT trigger a throttle/resume_rate emission (the count is
+  unchanged). A viewer briefly holding two open connections still
+  contributes exactly one lease to the space's count.
+- Lease survival does NOT carry delta eligibility to C2: after step 4 the
+  viewer MUST still send `subscribe` and then `resume` on C2 before the
+  server sends it any delta, and its local revision C is re-established
+  from C2's resume reply. Nothing (C, in-flight snapshot chunks, pending
+  replies) is inherited from C1.
 - A client that receives `superseded` on an old connection it still
   considered live SHOULD treat it as confirmation that its newer connection
   won; if it receives `superseded` unexpectedly (it did not itself open a

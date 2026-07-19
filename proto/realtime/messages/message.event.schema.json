@@ -29,7 +29,7 @@
           "maxLength": 128
         },
         "level": { "$ref": "../common.schema.json#/$defs/message_level" },
-        "text": { "type": "string", "maxLength": 1000 },
+        "text": { "$ref": "../common.schema.json#/$defs/free_text" },
         "occurred_at": { "$ref": "../common.schema.json#/$defs/unix_ms_timestamp" },
         "automation_id": { "type": "string", "maxLength": 128 }
       }
