@@ -75,9 +75,11 @@ struct MainTabView: View {
         }
         // Coming back to foreground: refresh immediately, (re)connect the
         // realtime channel, and revive the HTTP fallback poll if anything
-        // killed it while suspended. Leaving the foreground closes the
-        // realtime connection — the interest lease simply lapses server-side
-        // rather than being explicitly released.
+        // killed it while suspended. While the WebSocket is live, refresh()
+        // only updates REST-only state (presence) — the reliable collections
+        // stay owned by deltas. Leaving the foreground closes the realtime
+        // connection — the interest lease simply lapses server-side rather
+        // than being explicitly released.
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:

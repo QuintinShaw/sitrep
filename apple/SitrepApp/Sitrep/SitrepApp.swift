@@ -93,6 +93,12 @@ final class AppModel {
 
     private var realtimeClient: RealtimeClient?
     private var realtimeObservers: [Task<Void, Never>] = []
+    /// Last SpaceState received from the realtime channel, kept for the
+    /// process lifetime (not persisted to disk): when the app backgrounds
+    /// and later rebuilds the client, this — with its revision `C` — seeds
+    /// the new connection so the foreground resume is an incremental
+    /// `delta` rather than a full snapshot every time.
+    private var lastSpaceState: SpaceState?
     /// Low-frequency (>=30s) HTTP snapshot polling, used ONLY while the
     /// realtime connection is down for multiple backoff cycles — see
     /// `RealtimeClient.Notice.fellBackToPolling`/`.recovered`. This replaces
@@ -133,9 +139,11 @@ final class AppModel {
         Task { await PushRegistrar.shared.configure(client: client) }
         // Credentials changed under an existing connection (e.g. re-paired)
         // — reconnect with the new ones rather than keep talking under the
-        // old identity.
+        // old identity. The preserved SpaceState belongs to the old space's
+        // revision sequence, so drop it: the next resume starts from 0.
         if realtimeClient != nil {
             stopRealtime()
+            lastSpaceState = nil
             enterForeground()
         }
     }
@@ -183,7 +191,10 @@ final class AppModel {
         }
         let configuration = RealtimeClient.Configuration(
             url: url, token: token.isEmpty ? nil : token, deviceID: deviceID)
-        let rt = RealtimeClient(configuration: configuration)
+        // Seed with the last known SpaceState so the resume on the new
+        // connection is incremental (`last_revision: C`) instead of a full
+        // snapshot on every foreground cycle.
+        let rt = RealtimeClient(configuration: configuration, initialState: lastSpaceState ?? SpaceState())
         realtimeClient = rt
         realtimeObservers = [
             Task { [weak self] in
@@ -215,6 +226,7 @@ final class AppModel {
     }
 
     private func applyRealtimeState(_ state: SpaceState) {
+        lastSpaceState = state
         tasks = state.uiTasks
         let sortedMetrics = state.uiMetrics
         // Widgets refresh on a slow OS budget; while the app is foreground
@@ -347,6 +359,7 @@ final class AppModel {
     func disconnect() async {
         stopRealtime()
         stopFallbackPolling()
+        lastSpaceState = nil
         if !deviceID.isEmpty {
             try? await client?.revokeDevice(id: deviceID)
         }
@@ -379,7 +392,19 @@ final class AppModel {
         guard let client else { return }
         do {
             let snapshot = try await client.snapshot()
+            // presence is REST-only (the realtime protocol does not carry
+            // it) — updating it is the reason this refresh still runs even
+            // while realtime is live.
             presence = snapshot.presence
+            lastError = nil
+            lastSyncAt = .now
+            // Checked AFTER the await, deliberately: while the WebSocket is
+            // live, deltas own the four reliable collections and an HTTP
+            // response — possibly computed before the connection went live —
+            // must not clobber them. Re-checking here (not at request time)
+            // also covers the in-flight race: a fallback-poll or pull-to-
+            // refresh response that lands after `.recovered` is dropped.
+            guard connectionPhase.allowsReliableStateOverwrite else { return }
             events = snapshot.messages.map(\.state)
             automations = snapshot.automations.sorted { $0.name < $1.name }
             tasks = snapshot.tasks.sorted { $0.updatedAt > $1.updatedAt }
@@ -391,11 +416,13 @@ final class AppModel {
                 WidgetCenter.shared.reloadAllTimelines()
             }
             metrics = sorted
-            lastError = nil
-            lastSyncAt = .now
             adoptOrphanedTasks()
         } catch {
-            lastError = error.localizedDescription
+            // An HTTP hiccup while realtime is live is not a sync outage —
+            // don't raise the banner over it.
+            if connectionPhase.allowsReliableStateOverwrite {
+                lastError = error.localizedDescription
+            }
         }
     }
 }
