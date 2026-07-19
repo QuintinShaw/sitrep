@@ -44,6 +44,24 @@ public struct RealtimeResumeGate: Sendable, Equatable {
         case malformedSequence(String)
     }
 
+    /// True while a chunked snapshot is being reassembled (a non-final
+    /// chunk has arrived and the `final` one has not). Per SPEC.md §6.2 the
+    /// server MUST NOT interleave any other envelope in this window; the
+    /// caller must route any non-snapshot frame it receives during it to
+    /// `interleavedFrameDuringSnapshot()` instead of processing it.
+    public var isSnapshotInFlight: Bool { !pendingSnapshotChunks.isEmpty }
+
+    /// SPEC.md §6.2: "a viewer that receives any non-`ping`/`pong` envelope
+    /// between chunks MUST treat it as a malformed sequence and MAY close
+    /// the connection and reconnect." Discards the buffered chunks (they
+    /// can never be completed by a conformant continuation now) and reports
+    /// the malformed sequence; the caller closes and reconnects, and the
+    /// next connection resumes afresh.
+    public mutating func interleavedFrameDuringSnapshot() -> Outcome {
+        pendingSnapshotChunks = []
+        return .malformedSequence("non-snapshot envelope interleaved during a chunked snapshot")
+    }
+
     /// Call once, immediately after sending `resume{last_revision: N}` —
     /// including the very first resume on a fresh connection and any
     /// gap-triggered re-resume.
@@ -81,6 +99,9 @@ public struct RealtimeResumeGate: Sendable, Equatable {
     }
 
     public mutating func receiveDelta(_ body: DeltaBody) -> Outcome {
+        // §6.2: nothing but further snapshot chunks may arrive while a
+        // chunked snapshot is being reassembled.
+        if isSnapshotInFlight { return interleavedFrameDuringSnapshot() }
         if let requested = awaitingResumeReply {
             guard body.fromRevision == requested else { return .discarded }
             state.apply(delta: body)

@@ -96,6 +96,18 @@ public actor RealtimeClient {
     private var consecutiveFailures = 0
     private var firedFallback = false
     private var lastInboundAt: Int = 0
+    /// §13: `malformed` is non-fatal — a single undecodable frame is
+    /// skipped, not a reason to drop the connection. This counts the
+    /// current run of consecutive malformed frames so a persistently
+    /// broken peer still trips a circuit breaker (see `receiveFrame`).
+    private var consecutiveMalformedFrames = 0
+    /// Number of consecutive malformed frames after which the connection is
+    /// torn down and re-established (circuit breaker).
+    private let malformedFrameCircuitBreaker = 5
+    /// Distinguishes which `runLoop` invocation may clear `runTask` on
+    /// exit, so a stale loop finishing after a stop()/start() cycle can't
+    /// clobber the newer loop's handle.
+    private var runGeneration = 0
 
     private let phaseContinuation: AsyncStream<Phase>.Continuation
     public nonisolated let phases: AsyncStream<Phase>
@@ -124,12 +136,17 @@ public actor RealtimeClient {
     // MARK: - Lifecycle
 
     /// Idempotent: does nothing if already running. Call when the app enters
-    /// the foreground.
+    /// the foreground. Also the restart path after a terminal stop (see
+    /// `runLoop`): once the loop has exited — including after a
+    /// fatal-and-not-retryable server error — a later `start()` begins a
+    /// fresh reconnect cycle.
     public func start() {
         guard runTask == nil else { return }
         consecutiveFailures = 0
         firedFallback = false
-        runTask = Task { [weak self] in await self?.runLoop() }
+        runGeneration += 1
+        let generation = runGeneration
+        runTask = Task { [weak self] in await self?.runLoop(generation: generation) }
     }
 
     /// Tears down the connection and stops reconnecting. The interest lease
@@ -144,13 +161,32 @@ public actor RealtimeClient {
         phase = .idle
     }
 
-    private func runLoop() async {
+    /// True for a server error whose own `retryable`/`fatal` flags say
+    /// "connection closes AND retrying the same thing cannot succeed" —
+    /// `superseded`, `unauthenticated`, `version_unsupported` (§13). Per
+    /// ruling, these stop the run loop instead of feeding the reconnect
+    /// cycle: the notice has already been surfaced, and reconnection waits
+    /// for an explicit user action or the next foreground `start()`.
+    private func isTerminal(_ error: Error) -> Bool {
+        if case RealtimeClientError.serverError(let body) = error {
+            return body.fatal && !body.retryable
+        }
+        return false
+    }
+
+    private func runLoop(generation: Int) async {
+        var terminal = false
         while !Task.isCancelled {
             do {
                 try await connectOnce()
             } catch is CancellationError {
                 break
             } catch {
+                if isTerminal(error) {
+                    phase = .failed(String(describing: error))
+                    terminal = true
+                    break
+                }
                 consecutiveFailures += 1
                 phase = .failed(String(describing: error))
                 if consecutiveFailures >= fallbackAfterFailures && !firedFallback {
@@ -163,7 +199,14 @@ public actor RealtimeClient {
                 try? await Task.sleep(for: .seconds(backoffDelay(attempt: consecutiveFailures)))
             }
         }
-        phase = .idle
+        // Only the newest loop may release the handle (a stale loop exiting
+        // after stop()+start() must not clobber its successor's), and a
+        // terminal exit keeps the `.failed` phase visible instead of
+        // resetting to `.idle`.
+        if runGeneration == generation {
+            runTask = nil
+            if !terminal { phase = .idle }
+        }
     }
 
     private func backoffDelay(attempt: Int) -> Double {
@@ -176,6 +219,7 @@ public actor RealtimeClient {
 
     private func connectOnce() async throws {
         phase = .connecting
+        consecutiveMalformedFrames = 0
         var request = URLRequest(url: configuration.url)
         if let token = configuration.token, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -195,7 +239,12 @@ public actor RealtimeClient {
             on: socket)
         let ackFrame = try await receiveFrame(on: socket)
         guard case .ack(let ackEnvelope) = ackFrame, let lease = ackEnvelope.body.lease else {
-            if case .error(let e) = ackFrame { throw RealtimeClientError.serverError(e.body) }
+            if case .error(let e) = ackFrame {
+                // Route through handleError so the notice is surfaced and
+                // fatal errors (incl. terminal ones) throw with the server's
+                // own retryable/fatal semantics attached.
+                try await handleError(e.body, on: socket)
+            }
             throw RealtimeClientError.protocolViolation("expected subscribe ack with lease, got \(ackFrame)")
         }
         phase = .subscribed
@@ -238,7 +287,11 @@ public actor RealtimeClient {
             }
             return accept
         case .error(let env):
-            throw RealtimeClientError.serverError(env.body)
+            // handleError surfaces the notice and, for fatal codes (e.g.
+            // version_unsupported), throws serverError so the run loop can
+            // apply the terminal/retryable distinction.
+            try await handleError(env.body, on: socket)
+            throw RealtimeClientError.protocolViolation("handshake answered with a non-fatal error; reconnecting")
         default:
             throw RealtimeClientError.protocolViolation("expected hello accept, got \(frame)")
         }
@@ -247,6 +300,17 @@ public actor RealtimeClient {
     // MARK: - Frame dispatch (post-handshake, post-subscribe)
 
     private func dispatch(_ frame: RealtimeFrame, on socket: URLSessionWebSocketTask) async throws {
+        // §6.2: while a chunked snapshot is in flight, only further snapshot
+        // chunks (and ping/pong, which never reach dispatch) are legal on
+        // this connection. Anything else is a malformed sequence: drop the
+        // buffered chunks and reconnect; the fresh connection resumes anew.
+        if gate.isSnapshotInFlight {
+            guard case .snapshot = frame else {
+                _ = gate.interleavedFrameDuringSnapshot()
+                throw RealtimeClientError.protocolViolation(
+                    "non-snapshot envelope interleaved during a chunked snapshot")
+            }
+        }
         switch frame {
         case .snapshot(let env):
             switch gate.receiveSnapshotChunk(env.body) {
@@ -404,9 +468,23 @@ public actor RealtimeClient {
                 continue
             }
             do {
-                return try RealtimeFrame.decode(data)
+                let frame = try RealtimeFrame.decode(data)
+                consecutiveMalformedFrames = 0
+                return frame
             } catch RealtimeDecodingError.unknownType {
                 continue // §15: ignore, do not treat as malformed
+            } catch {
+                // §13: `malformed` is non-fatal — skip this frame and keep
+                // the connection. The circuit breaker only trips on a run
+                // of consecutive malformed frames, which indicates the
+                // stream itself is broken rather than one bad envelope.
+                consecutiveMalformedFrames += 1
+                if consecutiveMalformedFrames >= malformedFrameCircuitBreaker {
+                    consecutiveMalformedFrames = 0
+                    throw RealtimeClientError.protocolViolation(
+                        "\(malformedFrameCircuitBreaker) consecutive malformed frames; reconnecting (last: \(error))")
+                }
+                continue
             }
         }
     }
@@ -426,4 +504,19 @@ public actor RealtimeClient {
 
     private func nowMs() -> Int { Int(Date().timeIntervalSince1970 * 1000) }
     private func newEnvelopeID() -> String { UUID().uuidString }
+}
+
+public extension RealtimeClient.Phase {
+    /// Whether an HTTP snapshot result may overwrite the four reliable
+    /// collections (tasks/metrics/messages-events/automations). While the
+    /// realtime connection is `.live`, deltas own that state and an HTTP
+    /// response — possibly computed seconds ago — must not clobber it; in
+    /// every other phase the HTTP path is the best available source.
+    ///
+    /// Callers MUST evaluate this AFTER their HTTP `await` returns, not
+    /// before issuing the request: the phase can flip to `.live` while the
+    /// request is in flight, and it is the state of the world at apply time
+    /// that decides. REST-only concepts the realtime protocol does not
+    /// carry (e.g. `presence`) are exempt and always apply.
+    var allowsReliableStateOverwrite: Bool { self != .live }
 }

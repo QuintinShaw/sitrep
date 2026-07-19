@@ -214,11 +214,10 @@ extension DeltaEvent: Codable {
     private enum CodingKeys: String, CodingKey { case eventType = "event_type", event }
 
     public init(from decoder: Decoder) throws {
-        let dyn = try decoder.container(keyedBy: AnyKey.self)
-        let present = Set(dyn.allKeys.map(\.stringValue))
-        guard present == ["event_type", "event"] else {
-            throw RealtimeDecodingError.malformed("delta event must carry exactly event_type/event: \(present)")
-        }
+        // Only `event_type` and `event` are defined in v1; unknown sibling
+        // fields are ignored, matching SPEC.md §15's body-level tolerance
+        // (the top-level envelope strictness of §3 does not extend to
+        // objects nested inside `body`).
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let type = try c.decode(String.self, forKey: .eventType)
         switch type {
