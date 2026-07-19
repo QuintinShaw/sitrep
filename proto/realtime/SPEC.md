@@ -286,9 +286,11 @@ sent in two situations:
   `delta{from_revision: R-1, to_revision: R, events: [e]}` to every viewer
   **connection that is delta-eligible**: it holds an active interest lease
   (§7) AND has completed the full `hello → subscribe → resume` sequence,
-  including having been sent its resume reply (§6.3). The server MUST NOT
-  send any live delta on a connection before that connection's resume
-  reply.
+  including having been sent a **`snapshot` or `delta` reply** to its most
+  recent `resume` (§6.3). An `error` reply (e.g. `revision_unavailable`)
+  does NOT make the connection delta-eligible; eligibility begins only
+  with a successful snapshot-or-delta reply. The server MUST NOT send any
+  live delta on a connection before that reply.
 - **Catch-up**: as the reply to `resume` (§6.3), covering the range
   `(from_revision, to_revision]`.
 
@@ -344,7 +346,9 @@ The mandatory viewer connection sequence is **`hello` → `subscribe` →
 `resume`**, and `resume` is **required on every connection**, not
 optional: a connection — including a new connection that supersedes an
 old one (§9.4) — becomes **delta-eligible** only once it has completed
-all three steps in order and the server has sent its resume reply. A
+all three steps in order and the server has sent a snapshot-or-delta
+reply to its `resume` (§6.2; an `error` reply does not confer
+eligibility). A
 viewer MUST NOT send `resume` before it has sent `subscribe` on the same
 connection; a server receiving them out of order MUST reject the early
 `resume` with `error{code: malformed, retryable: true, fatal: false}`.
@@ -731,8 +735,12 @@ for the same authenticated `device_id`:
   `retryable: false` refers to that dying connection; the device's newer
   connection is unaffected and simply continues.
 - From that moment, ALL server-to-device traffic — `ack`s for the device's
-  reliable events, targeted `command`s, resume replies, live deltas — MUST
-  route to the device's **most recent** connection.
+  reliable events, targeted `command`s, live deltas — MUST route to the
+  device's **most recent** connection. A resume reply is the exception: it
+  is always sent on the connection that carried the `resume` request, so a
+  reply still pending on a superseded connection dies with that connection
+  and is never forwarded (the new connection obtains its own reply by
+  running the full sequence below).
 - Interest leases are unaffected: they are held per device (§7), so
   supersession neither ends a lease nor double-counts it — a device
   briefly holding two open connections contributes exactly one lease to
