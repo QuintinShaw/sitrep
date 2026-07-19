@@ -156,6 +156,7 @@ export class SpaceHub extends DurableObject<Env> {
       );
       CREATE TABLE IF NOT EXISTS http_idempotency (
         idempotency_key TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL,
         revision INTEGER NOT NULL,
         created_at INTEGER NOT NULL
       );
@@ -313,16 +314,36 @@ export class SpaceHub extends DurableObject<Env> {
 
   /** Mints (or replays, if idempotencyKey was already seen) a config.event
    * for an automation upsert/removal. Single synchronous transaction, same
-   * discipline as applyReliableEvent — see the class-level comment. */
+   * discipline as applyReliableEvent — see the class-level comment.
+   *
+   * The idempotency key is bound to the request's CONTENT, not just its
+   * key string: the stored fingerprint is the canonical JSON of
+   * (kind, automation_id, automation), compared verbatim on a replay.
+   * (Exact string comparison is strictly stronger than a hash and stays
+   * synchronous — crypto.subtle.digest is async and would break the
+   * single-transaction discipline.) A key reused for a DIFFERENT
+   * operation returns { conflict: true } and mints nothing, instead of
+   * silently replaying the first operation's result. */
   mintConfigEvent(
     idempotencyKey: string | null,
     payload: { kind: ConfigEventKind; automation_id: string; automation?: AutomationState },
-  ): { revision: number; automation: AutomationState | null } {
+  ): { revision: number; automation: AutomationState | null; conflict?: boolean } {
+    const fingerprint = JSON.stringify({
+      kind: payload.kind,
+      automation_id: payload.automation_id,
+      automation: payload.automation ?? null,
+    });
     if (idempotencyKey) {
       const existing = this.ctx.storage.sql
-        .exec<{ revision: number }>("SELECT revision FROM http_idempotency WHERE idempotency_key = ?", idempotencyKey)
+        .exec<{ revision: number; fingerprint: string }>(
+          "SELECT revision, fingerprint FROM http_idempotency WHERE idempotency_key = ?",
+          idempotencyKey,
+        )
         .toArray()[0];
       if (existing) {
+        if (existing.fingerprint !== fingerprint) {
+          return { revision: existing.revision, automation: null, conflict: true };
+        }
         return { revision: existing.revision, automation: this.readAutomation(payload.automation_id) };
       }
     }
@@ -347,10 +368,22 @@ export class SpaceHub extends DurableObject<Env> {
     this.setRevision(revision);
     if (idempotencyKey) {
       this.ctx.storage.sql.exec(
-        `INSERT INTO http_idempotency (idempotency_key, revision, created_at) VALUES (?, ?, ?)`,
+        `INSERT INTO http_idempotency (idempotency_key, fingerprint, revision, created_at) VALUES (?, ?, ?, ?)`,
         idempotencyKey,
+        fingerprint,
         revision,
         occurredAt,
+      );
+      // Bounded growth, cleaned lazily on the write path (no alarm): drop
+      // entries older than 24h, and cap the table at the most recent 500
+      // rows. A retry arriving after both windows re-executes as a fresh
+      // request — acceptable, since config.event minting is idempotent at
+      // the state level (upsert/delete) even without the key.
+      this.ctx.storage.sql.exec(`DELETE FROM http_idempotency WHERE created_at < ?`, occurredAt - 24 * 3600 * 1000);
+      this.ctx.storage.sql.exec(
+        `DELETE FROM http_idempotency WHERE idempotency_key NOT IN (
+           SELECT idempotency_key FROM http_idempotency ORDER BY created_at DESC LIMIT 500
+         )`,
       );
     }
     this.pruneEventLog(revision);

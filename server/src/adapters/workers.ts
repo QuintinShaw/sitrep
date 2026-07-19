@@ -544,6 +544,29 @@ function parseAutomationUpsert(body: any): { name: string; executor_kind: Automa
   return { name: String(body.name).slice(0, 256), executor_kind: kind, every_seconds: Math.max(1, everySeconds | 0) };
 }
 
+// /v3/automations role matrix (protocol-owner ruling, aligned with the
+// existing product decision "watcher schedules are editable from every
+// device; creation only from trusted devices" — same split /v2 makes
+// between canEmit-guarded POST and canView-guarded PATCH/DELETE):
+//   POST   (create/upsert) -> owner/admin only
+//   PATCH  (pause/resume, schedule.every_seconds) -> owner/admin/viewer
+//          (viewer editing the schedule is INTENTIONAL, not an oversight)
+//   DELETE -> owner/admin/viewer (aligned with /v2 canView's delete)
+// A conflict result from mintConfigEvent (same Idempotency-Key, different
+// operation content) maps to 409.
+
+function mintResultResponse(c: any, result: { revision: number; automation: AutomationState | null; conflict?: boolean }) {
+  if (result.conflict) {
+    return c.json({ error: "idempotency key was already used for a different operation" }, 409);
+  }
+  return c.json({ revision: result.revision, automation: result.automation });
+}
+
+const internalError = (c: any, e: unknown) => {
+  console.log(JSON.stringify({ level: "error", event: "v3_http_unhandled", message: String(e) }));
+  return c.json({ error: "internal error" }, 500);
+};
+
 app.post("/v3/automations", async (c: any) => {
   const role = c.get("role") as Role;
   if (!["admin", "owner"].includes(role)) return c.json({ error: "forbidden" }, 403);
@@ -558,42 +581,60 @@ app.post("/v3/automations", async (c: any) => {
     state: body.state === "paused" ? "paused" : "active",
   };
   const idempotencyKey = c.req.header("idempotency-key") ?? null;
-  const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
-  const result = await stub.mintConfigEvent(idempotencyKey, {
-    kind: "automation.upserted",
-    automation_id: automation.automation_id,
-    automation,
-  });
-  return c.json(result);
+  try {
+    const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
+    const result = await stub.mintConfigEvent(idempotencyKey, {
+      kind: "automation.upserted",
+      automation_id: automation.automation_id,
+      automation,
+    });
+    return mintResultResponse(c, result);
+  } catch (e) {
+    return internalError(c, e);
+  }
 });
 
 app.patch("/v3/automations/:id", async (c: any) => {
   const role = c.get("role") as Role;
   if (!["admin", "owner", "viewer"].includes(role)) return c.json({ error: "forbidden" }, 403);
-  const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
-  const id = c.req.param("id");
-  const existing = (await stub.automationsSnapshot()).find((a: AutomationState) => a.automation_id === id);
-  if (!existing) return c.json({ error: "not found" }, 404);
-  const body = await c.req.json().catch(() => null);
-  const next: AutomationState = {
-    ...existing,
-    ...(body?.state === "active" || body?.state === "paused" ? { state: body.state } : {}),
-    ...(body?.schedule?.every_seconds !== undefined
-      ? { schedule: { kind: "interval" as const, every_seconds: Math.max(1, Number(body.schedule.every_seconds) | 0) } }
-      : {}),
-  };
-  const idempotencyKey = c.req.header("idempotency-key") ?? null;
-  const result = await stub.mintConfigEvent(idempotencyKey, { kind: "automation.upserted", automation_id: id, automation: next });
-  return c.json(result);
+  try {
+    const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
+    const id = c.req.param("id");
+    const existing = (await stub.automationsSnapshot()).find((a: AutomationState) => a.automation_id === id);
+    if (!existing) return c.json({ error: "not found" }, 404);
+    const body = await c.req.json().catch(() => null);
+    const next: AutomationState = {
+      ...existing,
+      ...(body?.state === "active" || body?.state === "paused" ? { state: body.state } : {}),
+      ...(body?.schedule?.every_seconds !== undefined
+        ? { schedule: { kind: "interval" as const, every_seconds: Math.max(1, Number(body.schedule.every_seconds) | 0) } }
+        : {}),
+    };
+    const idempotencyKey = c.req.header("idempotency-key") ?? null;
+    const result = await stub.mintConfigEvent(idempotencyKey, { kind: "automation.upserted", automation_id: id, automation: next });
+    return mintResultResponse(c, result);
+  } catch (e) {
+    return internalError(c, e);
+  }
 });
 
 app.delete("/v3/automations/:id", async (c: any) => {
   const role = c.get("role") as Role;
-  if (!["admin", "owner"].includes(role)) return c.json({ error: "forbidden" }, 403);
-  const idempotencyKey = c.req.header("idempotency-key") ?? null;
-  const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
-  const result = await stub.mintConfigEvent(idempotencyKey, { kind: "automation.removed", automation_id: c.req.param("id") });
-  return c.json(result);
+  if (!["admin", "owner", "viewer"].includes(role)) return c.json({ error: "forbidden" }, 403);
+  try {
+    const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
+    const id = c.req.param("id");
+    // 404 before minting: deleting a nonexistent automation must not burn a
+    // revision on a no-op config.event (same existence-check pattern PATCH
+    // uses).
+    const existing = (await stub.automationsSnapshot()).find((a: AutomationState) => a.automation_id === id);
+    if (!existing) return c.json({ error: "not found" }, 404);
+    const idempotencyKey = c.req.header("idempotency-key") ?? null;
+    const result = await stub.mintConfigEvent(idempotencyKey, { kind: "automation.removed", automation_id: id });
+    return mintResultResponse(c, result);
+  } catch (e) {
+    return internalError(c, e);
+  }
 });
 
 export default app;

@@ -87,11 +87,17 @@ counts against the attached SQLite database).
   deduplication guarantee must hold regardless of how old a retried
   `device_seq` is, so it trades unbounded (but tiny — one row per
   historical event, `device_id`+`device_seq`+`revision`, all fixed-width)
-  storage growth for correctness. `push_outbox` and `pending_commands` are
-  the two "queue" tables in this design; both need a consumer (a future
-  Alarm/Queue-based push worker, explicitly out of scope for this phase) to
-  actually shrink — today they only grow, which is an accepted, called-out
-  gap (see the handoff's "known gaps" section).
+  storage growth for correctness. `http_idempotency` is bounded by lazy
+  cleanup on its own write path (no alarm): every insert also deletes
+  entries older than 24 hours and caps the table at the 500 most recent
+  rows — a control-plane retry arriving after both windows simply
+  re-executes as a fresh request, which is state-level safe because
+  automation upsert/delete are idempotent operations even without the
+  key. `push_outbox` and `pending_commands` are the two "queue" tables in
+  this design; both need a consumer (a future Alarm/Queue-based push
+  worker, explicitly out of scope for this phase) to actually shrink —
+  today they only grow, which is an accepted, called-out gap (see the
+  handoff's "known gaps" section).
 
 ## Hibernation
 
