@@ -257,10 +257,14 @@ private struct ScannerJoinView: View {
             Group {
                 if DataScannerViewController.isSupported {
                     ZStack {
-                        CodeScanner(control: scannerControl) { code in
-                            guard !joining else { return }
-                            onCode(code)
-                        }
+                        // Reentrancy is guarded synchronously: Coordinator's
+                        // `fired` flag stops it firing twice, and beginJoin's
+                        // `guard !joining` runs in the same actor turn as
+                        // this callback. (A `guard !joining` here would be
+                        // a no-op: makeCoordinator captures this closure
+                        // once, so it would forever see the `joining` value
+                        // from the sheet's first render.)
+                        CodeScanner(control: scannerControl, onCode: onCode)
 
                         LinearGradient(
                             colors: [.black.opacity(0.3), .clear, .black.opacity(0.42)],
