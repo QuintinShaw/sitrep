@@ -19,6 +19,23 @@ import { makeSnapshot } from "./domain.ts";
 export type Role = "admin" | "owner" | "viewer" | "source";
 export type Command = "pause" | "resume" | "stop";
 
+/** Strict allow-list parser for the REALTIME_ENABLED kill switch.
+ *
+ * wrangler.jsonc types this var as a boolean, but a Cloudflare dashboard
+ * variable override arrives as a STRING at runtime regardless of the
+ * declared type — `Boolean("false")` is `true`, which would silently flip
+ * the kill switch on for an operator who typed "false" in the dashboard.
+ * This flag gates a P0 client behavior, so parsing must be paranoid: only
+ * the boolean `true`, or the exact strings "true"/"1" (case-insensitive,
+ * surrounding whitespace trimmed), enable realtime. Everything else —
+ * `false`, "false", "0", "", undefined, or any other string — disables it. */
+export function parseRealtimeEnabledFlag(value: string | boolean | undefined): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "true" || normalized === "1";
+}
+
 export const TOKEN_RE = /^st2_([a-z0-9]{1,16})_[a-f0-9]{48}$/;
 
 export interface DeviceInfo {

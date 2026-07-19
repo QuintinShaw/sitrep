@@ -251,8 +251,13 @@ export class SpaceHub extends DurableObject<Env> {
     try {
       const row = this.ctx.storage.sql.exec<{ version: number }>("SELECT version FROM _schema_migrations WHERE id = 1").toArray()[0];
       return row?.version ?? 0;
-    } catch {
-      return 0;
+    } catch (e) {
+      // A missing migrations table means this is a genuinely fresh DO — DDL
+      // below is IF NOT EXISTS, so re-running it is benign. Any other SQL
+      // error (corruption, I/O) must not be silently treated as "fresh":
+      // rethrow so it surfaces instead of being misdiagnosed.
+      if (String(e).includes("no such table")) return 0;
+      throw e;
     }
   }
 
