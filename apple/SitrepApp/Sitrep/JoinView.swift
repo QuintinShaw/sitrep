@@ -499,11 +499,15 @@ struct CodeScanner: UIViewControllerRepresentable {
                     transcripts.append(text.transcript.filter { !$0.isWhitespace })
                 }
             }
+            // A rejected false-positive shape shouldn't mask a real code
+            // that appears later in the same candidate, so walk every
+            // match rather than stopping at the first.
             for candidate in transcripts + [transcripts.joined()] {
-                if let match = candidate.firstMatch(of: ConnectCode.scanPattern),
-                   !rejected.contains(String(match.output)) {
+                for match in candidate.matches(of: ConnectCode.scanPattern) {
+                    let code = String(match.output)
+                    guard !rejected.contains(code) else { continue }
                     fired = true
-                    onCode(String(match.output))
+                    onCode(code)
                     scanner?.stopScanning() // one shot; also stops the camera work
                     return
                 }
