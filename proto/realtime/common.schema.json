@@ -27,7 +27,7 @@
     },
     "device_seq": {
       "type": "integer",
-      "description": "Per-device monotonically increasing counter shared across ALL reliable event types (task.event and message.event) emitted by that device. The first reliable event a device ever sends in a space uses device_seq 1. A device MUST NOT reuse a device_seq value and MUST NOT emit device_seq values out of increasing order, but a gap (e.g. 5 then 7) is permitted and signals to the receiver that event 6 was lost and cannot be recovered.",
+      "description": "Monotonically increasing counter scoped to one (device, space) pair: each device keeps one independent counter per space it reports into, shared across ALL device-originated reliable event types (task.event and message.event) it emits into that space. The first reliable event a device ever sends in a given space uses device_seq 1. Within one (device, space) scope a device MUST NOT reuse a device_seq value and MUST NOT emit device_seq values out of increasing order, but a gap (e.g. 5 then 7) is permitted and signals to the receiver that event 6 was lost and cannot be recovered. config.event does not participate in this counter (it is server-minted and identified by its revision instead).",
       "minimum": 1
     },
     "space_revision": {
@@ -89,7 +89,7 @@
     },
     "metric_sample": {
       "type": "object",
-      "description": "Latest known sample of one metric, as carried in a snapshot or a metric.frame.",
+      "description": "Latest known sample of one metric, as carried in a snapshot or a metric.frame. The optional geometry/threshold fields (target/min/max/alert_above/alert_below) mirror the metric-owned hints in proto/SPEC.md so a viewer can render a gauge/bar and threshold markers from realtime data alone; like `value`, they are strings.",
       "additionalProperties": false,
       "required": ["metric_id", "value", "ts"],
       "properties": {
@@ -97,7 +97,34 @@
         "value": { "type": "string", "maxLength": 256 },
         "label": { "type": "string", "maxLength": 100 },
         "ts": { "$ref": "#/$defs/unix_ms_timestamp" },
-        "display": { "$ref": "#/$defs/display_hints" }
+        "display": { "$ref": "#/$defs/display_hints" },
+        "target": { "type": "string", "maxLength": 64 },
+        "min": { "type": "string", "maxLength": 64 },
+        "max": { "type": "string", "maxLength": 64 },
+        "alert_above": { "type": "string", "maxLength": 64 },
+        "alert_below": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "automation_state": {
+      "type": "object",
+      "description": "Full current state of one automation, as carried in snapshot.body.automations and in config.event bodies.",
+      "additionalProperties": false,
+      "required": ["automation_id", "name", "executor_kind", "schedule", "state"],
+      "properties": {
+        "automation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "executor_kind": { "type": "string", "enum": ["script", "agent", "hybrid"] },
+        "schedule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "every_seconds"],
+          "properties": {
+            "kind": { "const": "interval" },
+            "every_seconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "state": { "type": "string", "enum": ["active", "paused"] },
+        "last_run_at": { "$ref": "#/$defs/unix_ms_timestamp" }
       }
     },
     "message_record": {

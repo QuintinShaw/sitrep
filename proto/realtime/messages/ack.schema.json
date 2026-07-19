@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schema.sitrep.dev/realtime/v1/messages/ack.schema.json",
   "title": "ack",
-  "description": "Generic acknowledgment envelope, used for two distinct purposes that MAY be combined in one ack: (1) confirming receipt of one or more reliable events, identified by (device_id, device_seq) pairs, so the sender can prune its resend queue; (2) confirming a single control-plane request (hello is never acked this way; subscribe/interest.renew/command are), identified by echoing that request's envelope id in `in_reply_to`, optionally carrying a renewed interest lease. At least one of `acked` or `in_reply_to` MUST be present.",
+  "description": "Generic acknowledgment envelope, used for two distinct purposes that MAY be combined in one ack: (1) confirming receipt of one or more reliable events, identified by (device_id, device_seq) pairs, so the sender can prune its resend queue; (2) confirming a single control-plane request (hello is never acked this way; subscribe/unsubscribe/interest.renew/command are), identified by echoing that request's envelope id in `in_reply_to`, optionally carrying a renewed interest lease. At least one of `acked` or `in_reply_to` MUST be present. `acked` is an EXACT enumeration, not cumulative coverage: only the pairs literally listed are confirmed, and acknowledging seq N says nothing about any other seq. Every pair in one ack MUST carry the device_id of the connection's authenticated device (acks are routed to that device's most recent connection); a receiver that finds a pair for any other device MUST treat the envelope as malformed.",
   "allOf": [
     { "$ref": "../envelope.schema.json" },
     {
@@ -19,7 +19,7 @@
           "properties": {
             "acked": {
               "type": "array",
-              "description": "Reliable events being confirmed as durably applied. Safe to acknowledge the same (device_id, device_seq) more than once (idempotent).",
+              "description": "Reliable events being confirmed as durably applied - an exact enumeration (see top-level description); all pairs belong to the receiving connection's authenticated device. Safe to acknowledge the same (device_id, device_seq) more than once (idempotent).",
               "items": {
                 "type": "object",
                 "additionalProperties": false,

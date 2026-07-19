@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schema.sitrep.dev/realtime/v1/messages/hello.schema.json",
   "title": "hello",
-  "description": "MUST be the first envelope sent on a new connection, in both directions. A connecting device sends a `stage: offer` hello; the server responds with a `stage: accept` hello carrying the negotiated version. No other envelope type may precede hello on either side.",
+  "description": "MUST be the first envelope sent on a new connection, in both directions. A connecting device sends a `stage: offer` hello (client -> server); the server responds with a `stage: accept` hello (server -> client) carrying the negotiated version. The client MUST NOT send ANY other envelope until it has received and validated the accept; the server MUST answer any frame received before it has sent its accept with error{code: hello_required} and close the connection. Recommended timeouts: the server SHOULD close a connection that sends no offer within 10 s of establishment; the client SHOULD close and reconnect if no accept arrives within 10 s of sending its offer.",
   "allOf": [
     { "$ref": "../envelope.schema.json" },
     {

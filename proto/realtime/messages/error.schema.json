@@ -28,12 +28,13 @@
                 "revision_unavailable",
                 "command_expired",
                 "sequence_gap",
+                "superseded",
                 "internal_error"
               ]
             },
             "message": {
               "type": "string",
-              "description": "Human-readable, not machine-parsed. Implementations MUST branch only on `code`.",
+              "description": "Human-readable, not machine-parsed. Implementations MUST branch only on `code`. For internal_error, this text MUST NOT contain stack traces, internal file paths, or other implementation details.",
               "maxLength": 500
             },
             "in_reply_to": {
@@ -42,7 +43,7 @@
             },
             "retryable": {
               "type": "boolean",
-              "description": "True if resending the same logical request (typically with a new envelope id) can plausibly succeed without any other change."
+              "description": "True if resending the same logical request (typically with a new envelope id) can plausibly succeed without any other change. When fatal is also true, 'retry' means: reconnect first, then retry on the new connection."
             },
             "fatal": {
               "type": "boolean",
