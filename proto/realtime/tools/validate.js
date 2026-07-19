@@ -105,6 +105,9 @@ function authorizationErrors(role, frame) {
   if (frame?.type === "command" && frame?.body?.origin !== "viewer") {
     errors.push(`[auth] a client may only send command with origin "viewer" (got ${JSON.stringify(frame?.body?.origin)})`);
   }
+  if (frame?.type === "hello" && frame?.body?.stage !== "offer") {
+    errors.push(`[auth] a client may only send hello with stage "offer" (got ${JSON.stringify(frame?.body?.stage)})`);
+  }
   return errors;
 }
 
@@ -129,6 +132,85 @@ function validateFrame(frame) {
     errors.push(...(specific.errors ?? []).map((e) => `[${type}] ${e.instancePath} ${e.message}`));
   }
 
+  // Semantic invariant JSON Schema cannot express: delta revision arithmetic.
+  if (type === "delta" && specificOk && envelopeOk) {
+    const b = frame.body;
+    if (b.to_revision - b.from_revision !== b.events.length) {
+      errors.push(`[delta] to_revision - from_revision (${b.to_revision - b.from_revision}) != events.length (${b.events.length})`);
+    }
+  }
+
+  return errors;
+}
+
+// --- scenario sequence invariants (SPEC.md sections 5.1, 6.2, 6.3) -------
+//
+// Each scenario directory is an ordered message sequence (lexicographic
+// filename order). Beyond per-frame schema validity, the sequence itself
+// must uphold:
+//   - consecutive deltas chain exactly: d2.from_revision == d1.to_revision
+//   - snapshot chunks: consecutive, same revision, part numbers 1..n,
+//     final:false on all but the last, final:true closing the run, and no
+//     other envelope interleaved before the final chunk
+//   - device_seq values are non-decreasing per device across the sequence
+//     (equal values are legitimate retransmissions), covering both uplink
+//     event bodies and delta-embedded events
+function scenarioInvariantErrors(files) {
+  const errors = [];
+  let lastDeltaTo = null;
+  let chunkRun = null; // { revision, nextPart } while a snapshot is unfinished
+  const lastSeqByDevice = new Map();
+
+  const noteSeq = (rel, device, seq) => {
+    const prev = lastSeqByDevice.get(device);
+    if (prev !== undefined && seq < prev) {
+      errors.push(`${rel}: device_seq ${seq} for ${device} decreases (previous ${prev})`);
+    }
+    lastSeqByDevice.set(device, Math.max(prev ?? 0, seq));
+  };
+
+  for (const file of files) {
+    const rel = relative(file);
+    const { frame } = unwrap(loadJson(file));
+    const type = frame?.type;
+    const body = frame?.body ?? {};
+
+    if (chunkRun && type !== "snapshot") {
+      errors.push(`${rel}: ${type} envelope interleaved into an unfinished snapshot chunk run (SPEC 6.2 forbids anything but ping/pong)`);
+      chunkRun = null;
+    }
+
+    if (type === "delta") {
+      if (lastDeltaTo !== null && body.from_revision !== lastDeltaTo) {
+        errors.push(`${rel}: delta from_revision ${body.from_revision} does not chain from previous delta's to_revision ${lastDeltaTo}`);
+      }
+      lastDeltaTo = body.to_revision;
+      for (const item of body.events ?? []) {
+        const ev = item.event ?? {};
+        if (ev.device_id !== undefined && ev.device_seq !== undefined) noteSeq(rel, ev.device_id, ev.device_seq);
+      }
+    } else if (type === "snapshot") {
+      if (!chunkRun) {
+        if (body.part !== 1) errors.push(`${rel}: snapshot chunk run starts at part ${body.part}, expected 1`);
+        chunkRun = { revision: body.revision, nextPart: body.part + 1 };
+      } else {
+        if (body.revision !== chunkRun.revision) {
+          errors.push(`${rel}: snapshot chunk revision ${body.revision} differs from run revision ${chunkRun.revision}`);
+        }
+        if (body.part !== chunkRun.nextPart) {
+          errors.push(`${rel}: snapshot chunk part ${body.part}, expected ${chunkRun.nextPart}`);
+        }
+        chunkRun.nextPart = body.part + 1;
+      }
+      if (body.final === true) chunkRun = null;
+    } else if (type === "task.event" || type === "message.event") {
+      if (body.device_id !== undefined && body.device_seq !== undefined) noteSeq(rel, body.device_id, body.device_seq);
+    }
+  }
+
+  if (chunkRun) {
+    errors.push(`scenario ends with an unfinished snapshot chunk run (no final: true chunk)`);
+  }
   return errors;
 }
 
@@ -179,6 +261,24 @@ for (const file of walk(invalidDir)) {
     console.error(`FAIL (expected invalid, but it validated cleanly): ${relative(file)}`);
   } else {
     console.log(`ok       ${relative(file)}  (rejected as expected: ${errors[0]})`);
+  }
+}
+
+// --- 4. scenario sequence invariants -------------------------------------
+
+for (const scenario of readdirSync(scenariosDir).sort()) {
+  const dir = path.join(scenariosDir, scenario);
+  if (!statSync(dir).isDirectory()) continue;
+  const files = readdirSync(dir).filter((f) => f.endsWith(".json")).sort()
+    .map((f) => path.join(dir, f));
+  checked++;
+  const errors = scenarioInvariantErrors(files);
+  if (errors.length > 0) {
+    failures++;
+    console.error(`FAIL (scenario invariants): fixtures/scenarios/${scenario}`);
+    for (const e of errors) console.error(`    ${e}`);
+  } else {
+    console.log(`ok       fixtures/scenarios/${scenario}  (sequence invariants hold)`);
   }
 }
 

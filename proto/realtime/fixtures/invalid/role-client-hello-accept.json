@@ -1,0 +1,14 @@
+{
+  "sender_role": "viewer",
+  "frame": {
+    "type": "hello",
+    "id": "01H9Z0X8K3F0T3B0S0V0W0X3G0",
+    "ts": 1752480000010,
+    "body": {
+      "stage": "accept",
+      "protocol_version": 1,
+      "session_id": "sess-forged",
+      "heartbeat_interval_ms": 20000
+    }
+  }
+}
