@@ -524,20 +524,23 @@ export class SpaceHub extends DurableObject<Env> {
       if (other === ws) continue;
       const otherAtt = other.deserializeAttachment();
       if (isConnAttachment(otherAtt) && otherAtt.helloDone) {
-        this.send(other, "error", {
-          code: "superseded",
-          message: "device completed hello on a newer connection",
-          ...ERROR_SEMANTICS.superseded,
-        });
         // Product invariant 5: superseded must never be silent — it is a
         // security-relevant event (possible credential/session reuse), so it
-        // always logs at 100% via logAlways, independent of the wire reply
-        // above (which must stay byte-identical for the superseded peer).
+        // always logs at 100% via logAlways. Logged BEFORE the wire reply
+        // below: if `this.send(other, ...)` were to throw (e.g. a socket
+        // that's already gone), the security log must still have fired —
+        // it must never depend on the send succeeding. The reply itself
+        // stays byte-identical for the superseded peer in the success path.
         this.logAlways("superseded", {
           device_id: att.deviceId,
           role: att.role,
           superseded_session_id: otherAtt.sessionId,
           superseding_session_id: newSessionId,
+        });
+        this.send(other, "error", {
+          code: "superseded",
+          message: "device completed hello on a newer connection",
+          ...ERROR_SEMANTICS.superseded,
         });
         other.close(1008, "superseded");
       }
