@@ -361,3 +361,77 @@ var envCounter int64
 func rttestEnvID() string {
 	return fmt.Sprintf("env-%d", atomic.AddInt64(&envCounter, 1))
 }
+
+// TestClientStopsAfterFatalNonRetryableHello pins the give-up rule: a
+// handshake rejection that is fatal AND not retryable (here
+// version_unsupported, SPEC.md section 13) must stop the reconnect loop
+// entirely instead of hammering the server forever.
+func TestClientStopsAfterFatalNonRetryableHello(t *testing.T) {
+	var connCount int32
+	srv := rttest.New(func(conn *rttest.Conn) {
+		atomic.AddInt32(&connCount, 1)
+		if _, err := conn.ReadEnvelope(); err != nil {
+			return // expected the hello offer
+		}
+		conn.SendError(wire.ErrorBody{
+			Code:      wire.ErrVersionUnsupported,
+			Message:   "no shared protocol version",
+			Retryable: boolPtr(false),
+			Fatal:     boolPtr(true),
+		})
+	})
+	defer srv.Close()
+
+	store := newTestOutbox(t)
+	newTestClient(t, srv.URL(), store, nil)
+
+	// Backoff base is 5ms/cap 20ms: if the client kept reconnecting, this
+	// window would see dozens of connections.
+	time.Sleep(300 * time.Millisecond)
+	if n := atomic.LoadInt32(&connCount); n != 1 {
+		t.Fatalf("server saw %d connections after a fatal non-retryable hello rejection, want exactly 1 (no reconnect loop)", n)
+	}
+}
+
+// TestClientStopsWhenAcceptNamesUnofferedVersion pins the accept-side
+// version check: SPEC.md section 9.2 requires the server to select from
+// the intersection with the offer, so an accept naming a version the
+// client never offered is a failed negotiation — treated like
+// version_unsupported, and the reconnect loop stops.
+func TestClientStopsWhenAcceptNamesUnofferedVersion(t *testing.T) {
+	var connCount int32
+	srv := rttest.New(func(conn *rttest.Conn) {
+		atomic.AddInt32(&connCount, 1)
+		if _, err := conn.ReadEnvelope(); err != nil {
+			return // expected the hello offer
+		}
+		accept := wire.HelloAccept{
+			Stage:               "accept",
+			ProtocolVersion:     99, // never offered (client offers [1])
+			SessionID:           "sess-bogus",
+			HeartbeatIntervalMS: 1000,
+		}
+		env, err := wire.NewEnvelope(wire.TypeHello, rttestEnvID(), rttest.NowMS(), wire.HelloBody{Accept: &accept})
+		if err != nil {
+			t.Errorf("NewEnvelope: %v", err)
+			return
+		}
+		_ = conn.WriteEnvelope(env)
+		// Keep the connection open; the client must abandon it (and not
+		// come back) on its own.
+		for {
+			if _, err := conn.ReadEnvelope(); err != nil {
+				return
+			}
+		}
+	})
+	defer srv.Close()
+
+	store := newTestOutbox(t)
+	newTestClient(t, srv.URL(), store, nil)
+
+	time.Sleep(300 * time.Millisecond)
+	if n := atomic.LoadInt32(&connCount); n != 1 {
+		t.Fatalf("server saw %d connections after an accept naming an unoffered version, want exactly 1 (no reconnect loop)", n)
+	}
+}

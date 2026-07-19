@@ -22,6 +22,14 @@ const sourceRole = "source"
 
 var errClientClosing = errors.New("realtime client: closing")
 
+// errNoRetry marks a handshake failure that is fatal AND not retryable
+// (version_unsupported, unauthenticated, or a server accept naming a
+// protocol version we never offered): reconnecting cannot succeed without
+// an out-of-band change (a software upgrade, a new credential), so the
+// reconnect loop must stop instead of hammering the server forever. The
+// process recovers by constructing a new Client (i.e. an explicit restart).
+var errNoRetry = errors.New("realtime client: fatal, not retryable")
+
 // Client is a reconnecting realtime-protocol source connection. Construct
 // with New; it starts connecting immediately in the background. Call
 // SendTaskEvent/SendMessageEvent for reliable events and SendMetric for
@@ -219,6 +227,14 @@ func (c *Client) run() {
 		if errors.Is(err, errClientClosing) {
 			return
 		}
+		if errors.Is(err, errNoRetry) {
+			// A retry can only fail the same way (wrong protocol version,
+			// revoked credential, ...): surface it and stop the loop
+			// entirely rather than reconnecting forever. Recovery is an
+			// explicit restart (a new Client).
+			c.cfg.Logf("realtime: giving up, not retryable: %v", err)
+			return
+		}
 		c.cfg.Logf("realtime: connection ended: %v", err)
 
 		c.mu.Lock()
@@ -360,6 +376,13 @@ func (c *Client) awaitHelloAccept(ctx context.Context, conn *websocket.Conn) (wi
 		body, derr := wire.DecodeBody(env)
 		if derr == nil {
 			eb := body.(wire.ErrorBody)
+			// A fatal AND non-retryable rejection (version_unsupported,
+			// unauthenticated, ...) can only repeat on the next attempt:
+			// mark it errNoRetry so the reconnect loop stops (SPEC.md
+			// section 13's retryable flag is authoritative).
+			if eb.Fatal != nil && *eb.Fatal && eb.Retryable != nil && !*eb.Retryable {
+				return wire.HelloAccept{}, fmt.Errorf("server rejected hello: %s: %s: %w", eb.Code, eb.Message, errNoRetry)
+			}
 			return wire.HelloAccept{}, fmt.Errorf("server rejected hello: %s: %s", eb.Code, eb.Message)
 		}
 		return wire.HelloAccept{}, fmt.Errorf("server rejected hello with malformed error body")
@@ -374,6 +397,23 @@ func (c *Client) awaitHelloAccept(ctx context.Context, conn *websocket.Conn) (wi
 	hb := body.(wire.HelloBody)
 	if hb.Accept == nil {
 		return wire.HelloAccept{}, fmt.Errorf("expected hello accept, got offer")
+	}
+	// SPEC.md section 9.2: the server selects from the INTERSECTION of the
+	// offer's protocol_versions with its own set, so a conformant accept
+	// always names a version we offered. An accept naming any other version
+	// is a failed negotiation — retrying with the same offer cannot end
+	// differently, so treat it like version_unsupported and stop.
+	offered := false
+	for _, v := range c.cfg.ProtocolVersions {
+		if v == hb.Accept.ProtocolVersion {
+			offered = true
+			break
+		}
+	}
+	if !offered {
+		return wire.HelloAccept{}, fmt.Errorf(
+			"server accepted protocol version %d, which we never offered (%v): %w",
+			hb.Accept.ProtocolVersion, c.cfg.ProtocolVersions, errNoRetry)
 	}
 	return *hb.Accept, nil
 }
