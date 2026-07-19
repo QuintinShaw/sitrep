@@ -135,3 +135,19 @@ Net effect: a space's ongoing cost while every connection is idle (no
 task/message/metric traffic, no lease churn) is exactly zero DO
 invocations — the state sits in SQLite and the connections sit hibernated
 until either side has something to say.
+
+## Intentional omissions
+
+- **The 10 s handshake timeout (SPEC.md section 9.1, a SHOULD) is not
+  implemented.** Enforcing it server-side would require a per-connection
+  timer — exactly the `setTimeout`/alarm machinery this design excludes to
+  stay hibernation-friendly. The exposure is bounded: a connection that
+  never sends an offer holds no lease, receives no deltas, writes nothing,
+  and costs only the runtime's parked-socket overhead; the client side of
+  the recommendation (close and reconnect if no accept arrives within
+  10 s) is where the liveness benefit actually lives, and belongs to the
+  client implementations.
+- **`sequence_gap` (SPEC.md section 5.1, a MAY) is not emitted.** The
+  event that did arrive is applied either way; the advisory adds a
+  per-event bookkeeping read ("what was this device's previous seq")
+  purely to produce a non-actionable warning.
