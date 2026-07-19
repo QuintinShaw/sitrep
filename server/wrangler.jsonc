@@ -12,7 +12,13 @@
     "APNS_HOST": "api.sandbox.push.apple.com"
   },
   "durable_objects": {
-    "bindings": [{ "name": "USER_STORE", "class_name": "UserStore" }]
+    "bindings": [
+      { "name": "USER_STORE", "class_name": "UserStore" },
+      { "name": "SPACE_HUB", "class_name": "SpaceHub" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserStore"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["UserStore"] },
+    { "tag": "v2", "new_sqlite_classes": ["SpaceHub"] }
+  ]
 }

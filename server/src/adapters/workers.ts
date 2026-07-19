@@ -5,6 +5,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { createApp, newToken, TOKEN_RE, type Command, type DeviceInfo, type Role, type SpaceRegistry } from "../app.ts";
 import { endActivity, sendAlert, startActivity, updateActivity, type ApnsConfig } from "../apns.ts";
+import { SpaceHub } from "../realtime/space-hub.ts";
+import type { AutomationExecutorKind, AutomationState } from "../realtime/types.ts";
+
+// Re-exported so wrangler (which binds Durable Object classes by name from
+// this entry module, see wrangler.jsonc) can resolve SpaceHub, same as
+// UserStore below.
+export { SpaceHub };
 import {
   appendTaskLog,
   EVENT_LOG_CAP,
@@ -485,6 +492,108 @@ app.get("/debug/tokens", async (c: any) => {
     return c.json({ error: "unauthorized" }, 401);
   }
   return c.json(await stub(env, "default").debugTokens(c.req.query("full") === "1"));
+});
+
+// ---- /v3: realtime WebSocket + its HTTP control-plane companion ----
+//
+// Both routes ride the SAME `/v3/*` `authenticate` middleware registered in
+// app.ts (st2 token parsing, unchanged from /v2) so an invalid or
+// unresolvable token gets its 401 from that shared, already-tested path —
+// this handler runs at all ONLY once a token has resolved to a real
+// device/role, and it is the only place SpaceHub is ever touched.
+
+function spaceHubStub(env: WorkerEnv, space: string) {
+  return env.SPACE_HUB.getByName(space);
+}
+
+app.get("/v3/realtime", async (c: any) => {
+  const env = c.env as WorkerEnv;
+  const raw = c.req.raw as Request;
+  if ((raw.headers.get("upgrade") ?? "").toLowerCase() !== "websocket") {
+    return c.text("expected websocket upgrade", 426);
+  }
+  // authenticate() already ran (see app.use("/v3/*", authenticate) in
+  // app.ts): an invalid/unresolvable token never reaches this line, and no
+  // Durable Object of any kind is touched for it beyond the UserStore
+  // lookup authenticate() itself performs — SpaceHub is instantiated only
+  // by the single stub.fetch() call below, on the success path.
+  const deviceId: string | undefined = c.get("deviceId");
+  const role = c.get("role") as Role;
+  if (!deviceId) {
+    // The legacy bare-admin token (self-host, no registry) resolves to a
+    // role but no device identity; the realtime protocol requires one.
+    return c.json({ error: "realtime requires a paired device token" }, 401);
+  }
+  const realtimeRole: "source" | "viewer" = role === "source" ? "source" : "viewer";
+
+  const headers = new Headers(raw.headers);
+  headers.set("x-sitrep-device-id", deviceId);
+  headers.set("x-sitrep-role", realtimeRole);
+  const forwardReq = new Request(raw.url, { method: raw.method, headers });
+
+  // Exactly one forwarded operation per inbound upgrade request: the DO's
+  // own fetch() creates the WebSocketPair and calls ctx.acceptWebSocket
+  // once (see SpaceHub#fetch).
+  return spaceHubStub(env, c.get("space")).fetch(forwardReq);
+});
+
+function parseAutomationUpsert(body: any): { name: string; executor_kind: AutomationExecutorKind; every_seconds: number } | null {
+  const kind = body?.executor_kind;
+  const everySeconds = Number(body?.schedule?.every_seconds);
+  if (!body?.name || !["script", "agent", "hybrid"].includes(kind) || !Number.isFinite(everySeconds)) return null;
+  return { name: String(body.name).slice(0, 256), executor_kind: kind, every_seconds: Math.max(1, everySeconds | 0) };
+}
+
+app.post("/v3/automations", async (c: any) => {
+  const role = c.get("role") as Role;
+  if (!["admin", "owner"].includes(role)) return c.json({ error: "forbidden" }, 403);
+  const body = await c.req.json().catch(() => null);
+  const parsed = parseAutomationUpsert(body);
+  if (!parsed) return c.json({ error: "name, executor_kind and schedule.every_seconds required" }, 400);
+  const automation: AutomationState = {
+    automation_id: typeof body.automation_id === "string" && body.automation_id ? body.automation_id : crypto.randomUUID(),
+    name: parsed.name,
+    executor_kind: parsed.executor_kind,
+    schedule: { kind: "interval", every_seconds: parsed.every_seconds },
+    state: body.state === "paused" ? "paused" : "active",
+  };
+  const idempotencyKey = c.req.header("idempotency-key") ?? null;
+  const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
+  const result = await stub.mintConfigEvent(idempotencyKey, {
+    kind: "automation.upserted",
+    automation_id: automation.automation_id,
+    automation,
+  });
+  return c.json(result);
+});
+
+app.patch("/v3/automations/:id", async (c: any) => {
+  const role = c.get("role") as Role;
+  if (!["admin", "owner", "viewer"].includes(role)) return c.json({ error: "forbidden" }, 403);
+  const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
+  const id = c.req.param("id");
+  const existing = (await stub.automationsSnapshot()).find((a: AutomationState) => a.automation_id === id);
+  if (!existing) return c.json({ error: "not found" }, 404);
+  const body = await c.req.json().catch(() => null);
+  const next: AutomationState = {
+    ...existing,
+    ...(body?.state === "active" || body?.state === "paused" ? { state: body.state } : {}),
+    ...(body?.schedule?.every_seconds !== undefined
+      ? { schedule: { kind: "interval" as const, every_seconds: Math.max(1, Number(body.schedule.every_seconds) | 0) } }
+      : {}),
+  };
+  const idempotencyKey = c.req.header("idempotency-key") ?? null;
+  const result = await stub.mintConfigEvent(idempotencyKey, { kind: "automation.upserted", automation_id: id, automation: next });
+  return c.json(result);
+});
+
+app.delete("/v3/automations/:id", async (c: any) => {
+  const role = c.get("role") as Role;
+  if (!["admin", "owner"].includes(role)) return c.json({ error: "forbidden" }, 403);
+  const idempotencyKey = c.req.header("idempotency-key") ?? null;
+  const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
+  const result = await stub.mintConfigEvent(idempotencyKey, { kind: "automation.removed", automation_id: c.req.param("id") });
+  return c.json(result);
 });
 
 export default app;

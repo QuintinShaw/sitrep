@@ -160,6 +160,10 @@ export function createApp(opts: AppOptions) {
 
   // ---- authenticated: resolve space + role from the token ----
 
+  // Shared by /v2/* (existing product API) and /v3/* (realtime + its HTTP
+  // control-plane companion): identical st2 token parsing and role/space/
+  // deviceId resolution, so /v3 gets exactly the same "invalid token never
+  // reaches a handler" guarantee /v2 already has, with no duplicated logic.
   const authenticate = async (c: Context<Vars>, next: Next) => {
     if (c.req.path === "/v2/spaces" || c.req.path === "/v2/join") return next();
     const admin = opts.authToken?.(c);
@@ -186,6 +190,7 @@ export function createApp(opts: AppOptions) {
     await next();
   };
   app.use("/v2/*", authenticate);
+  app.use("/v3/*", authenticate);
 
   const store = (c: Context<Vars>) => opts.store(c, c.get("space"));
   const registry = (c: Context<Vars>) => opts.registry?.(c, c.get("space"));
