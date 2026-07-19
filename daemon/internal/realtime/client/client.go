@@ -524,10 +524,27 @@ func (c *Client) handleFrame(ctx context.Context, conn *websocket.Conn, env wire
 	switch env.Type {
 	case wire.TypeAck:
 		ab := body.(wire.AckBody)
+		// SPEC.md sections 5.3/13: every pair in one ack MUST carry the
+		// device_id of this connection's authenticated device; a pair for
+		// any other device makes the WHOLE envelope malformed. Drop the
+		// ack without retiring anything — the events stay queued for a
+		// later well-formed ack (resend makes this safe) — report the
+		// protocol violation back as error{malformed}, and keep the
+		// connection (malformed is retryable, non-fatal).
 		for _, p := range ab.Acked {
 			if p.DeviceID != c.cfg.DeviceID {
-				continue // malformed per SPEC.md 5.3; ignore rather than trust
+				c.cfg.Logf("realtime: protocol violation: ack %s carries a pair for foreign device %q; dropping whole ack", env.ID, p.DeviceID)
+				c.sendError(ctx, conn, wire.ErrorBody{
+					Code:      wire.ErrMalformed,
+					Message:   "ack pair for a device other than this connection's",
+					InReplyTo: env.ID,
+					Retryable: boolPtr(true),
+					Fatal:     boolPtr(false),
+				})
+				return nil
 			}
+		}
+		for _, p := range ab.Acked {
 			if err := c.cfg.Outbox.Ack(ctx, c.cfg.Space, p.DeviceSeq); err != nil {
 				c.cfg.Logf("realtime: ack seq %d: %v", p.DeviceSeq, err)
 			}
@@ -573,20 +590,13 @@ func (c *Client) handleCommand(ctx context.Context, conn *websocket.Conn, env wi
 	windowEnd := time.UnixMilli(env.TS).Add(time.Duration(cb.TTLMs) * time.Millisecond).Add(skew)
 	if now.Before(windowStart) || now.After(windowEnd) {
 		c.cfg.Logf("realtime: dropping expired command %s (action %s)", cb.CommandID, cb.Action)
-		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		errBody := wire.ErrorBody{
+		c.sendError(ctx, conn, wire.ErrorBody{
 			Code:      wire.ErrCommandExpired,
 			Message:   "command ttl window elapsed",
 			InReplyTo: env.ID,
 			Retryable: boolPtr(false),
 			Fatal:     boolPtr(false),
-		}
-		if eenv, eerr := wire.NewEnvelope(wire.TypeError, newEnvelopeID(), c.nowMS(), errBody); eerr == nil {
-			if data, derr := eenv.Encode(); derr == nil {
-				_ = conn.Write(writeCtx, websocket.MessageText, data)
-			}
-		}
+		})
 		return
 	}
 
@@ -613,6 +623,23 @@ func (c *Client) handleCommand(ctx context.Context, conn *websocket.Conn, env wi
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// sendError best-effort writes one error envelope on the current
+// connection; failures are ignored (the connection's own health checks
+// notice a dying socket independently).
+func (c *Client) sendError(ctx context.Context, conn *websocket.Conn, body wire.ErrorBody) {
+	env, err := wire.NewEnvelope(wire.TypeError, newEnvelopeID(), c.nowMS(), body)
+	if err != nil {
+		return
+	}
+	data, err := env.Encode()
+	if err != nil {
+		return
+	}
+	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_ = conn.Write(writeCtx, websocket.MessageText, data)
+}
 
 // alreadySeen reports whether commandID has been handled before, recording
 // it if not. Bounded so a long-lived connection doesn't grow this set

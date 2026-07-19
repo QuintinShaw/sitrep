@@ -435,3 +435,94 @@ func TestClientStopsWhenAcceptNamesUnofferedVersion(t *testing.T) {
 		t.Fatalf("server saw %d connections after an accept naming an unoffered version, want exactly 1 (no reconnect loop)", n)
 	}
 }
+
+// TestClientRejectsAckWithForeignDevicePair pins the SPEC.md section
+// 5.3/13 rule: an ack carrying any (device_id, device_seq) pair for a
+// device other than this connection's makes the WHOLE envelope malformed —
+// nothing is retired from the outbox, not even the pairs that did match.
+// The connection survives (malformed is non-fatal): a later well-formed
+// ack on the same connection still retires the event.
+func TestClientRejectsAckWithForeignDevicePair(t *testing.T) {
+	badAckSent := make(chan struct{}, 1)
+	sendGoodAck := make(chan struct{})
+	srv := rttest.New(func(conn *rttest.Conn) {
+		if _, err := conn.HelloAccept("sess", 1000); err != nil {
+			t.Errorf("HelloAccept: %v", err)
+			return
+		}
+		gotFirst := false
+		for {
+			env, err := conn.ReadEnvelope()
+			if err == rttest.ErrPing {
+				conn.WritePong()
+				continue
+			}
+			if err != nil {
+				return
+			}
+			if env.Type != wire.TypeTaskEvent {
+				continue
+			}
+			body, _ := wire.DecodeBody(env)
+			tb := body.(wire.TaskEventBody)
+			if !gotFirst {
+				gotFirst = true
+				// A malformed ack: one matching pair AND one foreign pair.
+				// The client must drop it whole — even the matching pair
+				// must not be retired.
+				bad := wire.AckBody{Acked: []wire.AckedPair{
+					{DeviceID: tb.DeviceID, DeviceSeq: tb.DeviceSeq},
+					{DeviceID: "someone-else", DeviceSeq: tb.DeviceSeq},
+				}}
+				badEnv, err := wire.NewEnvelope(wire.TypeAck, rttestEnvID(), rttest.NowMS(), bad)
+				if err != nil {
+					t.Errorf("NewEnvelope: %v", err)
+					return
+				}
+				if err := conn.WriteEnvelope(badEnv); err != nil {
+					return
+				}
+				select {
+				case badAckSent <- struct{}{}:
+				default:
+				}
+				go func() {
+					<-sendGoodAck
+					conn.Ack(tb.DeviceID, tb.DeviceSeq)
+				}()
+			}
+		}
+	})
+	defer srv.Close()
+
+	store := newTestOutbox(t)
+	c := newTestClient(t, srv.URL(), store, nil)
+
+	if err := c.SendTaskEvent(TaskEvent{TaskID: "run-1", Kind: "started", OccurredAt: time.Now()}); err != nil {
+		t.Fatalf("SendTaskEvent: %v", err)
+	}
+
+	select {
+	case <-badAckSent:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server never sent the malformed ack")
+	}
+
+	// Give the client ample time to (mis)process the malformed ack; the
+	// outbox entry must still be there.
+	time.Sleep(100 * time.Millisecond)
+	pending, err := store.Pending(context.Background(), testSpace)
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("outbox has %d items after the malformed ack, want 1 (a foreign pair must void the whole ack)", len(pending))
+	}
+
+	// The connection survived: a well-formed ack still works.
+	close(sendGoodAck)
+	waitFor(t, 3*time.Second, func() bool {
+		p, err := store.Pending(context.Background(), testSpace)
+		return err == nil && len(p) == 0
+	})
+}
