@@ -203,6 +203,23 @@ export class SpaceHub extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    // Top-level exception guard: an unexpected throw anywhere in a message
+    // handler must degrade to error{internal_error} (SPEC.md section 13:
+    // retryable, non-fatal, message free of implementation details), never
+    // kill the DO instance or silently swallow the frame.
+    try {
+      this.dispatchMessage(ws, message);
+    } catch (e) {
+      this.logAlways("unhandled_error", { message: String(e), stack: (e as Error)?.stack });
+      try {
+        this.reply(ws, "internal_error", "unexpected server error", undefined);
+      } catch {
+        // The socket itself may be broken; nothing more to do.
+      }
+    }
+  }
+
+  private dispatchMessage(ws: WebSocket, message: string | ArrayBuffer): void {
     if (typeof message !== "string") return; // no binary frames in this protocol
     if (message === "ping" || message === "pong") return; // handled by auto-response; defensive no-op
 
@@ -279,9 +296,14 @@ export class SpaceHub extends DurableObject<Env> {
   }
 
   async webSocketClose(): Promise<void> {
-    // Interest leases and the event log are keyed by device/space, not by
-    // connection (SPEC.md section 7) — nothing to clean up on close beyond
-    // letting the socket go.
+    try {
+      // Interest leases and the event log are keyed by device/space, not by
+      // connection (SPEC.md section 7) — nothing to clean up on close beyond
+      // letting the socket go. The guard exists so any future cleanup added
+      // here degrades to a log line instead of an uncaught DO exception.
+    } catch (e) {
+      this.logAlways("unhandled_error", { message: String(e), phase: "webSocketClose" });
+    }
   }
 
   async webSocketError(_ws: WebSocket, error: unknown): Promise<void> {
@@ -852,7 +874,7 @@ export class SpaceHub extends DurableObject<Env> {
 
   private reply(ws: WebSocket, code: ErrorCode, message: string, inReplyTo: string | undefined): void {
     this.sendRaw(ws, makeStandardError(code, message, inReplyTo));
-    if (code !== "internal_error") this.logAlways("protocol_error", { code, message });
+    this.logAlways("protocol_error", { code, message });
   }
 
   private logHotPath(event: string, data: Record<string, unknown>): void {
