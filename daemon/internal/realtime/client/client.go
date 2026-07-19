@@ -29,6 +29,15 @@ var errClientClosing = errors.New("realtime client: closing")
 // process recovers by constructing a new Client (i.e. an explicit restart).
 var errNoRetry = errors.New("realtime client: fatal, not retryable")
 
+// ErrInvalidBody wraps a failure from a wire body's Validate(), returned by
+// SendTaskEvent/SendMessageEvent when the caller-supplied fields can never
+// produce a valid envelope (bad kind, out-of-range percent, oversized free
+// text, ...). It is the one Enqueue-adjacent failure callers should treat as
+// permanent: unlike outbox.ErrOutboxFull or any other Enqueue error (a
+// transient BeginTx/COUNT/INSERT/Commit failure), retrying the exact same
+// malformed body can never succeed. Use errors.Is to check for it.
+var ErrInvalidBody = errors.New("realtime: event body failed validation")
+
 // Client is a reconnecting realtime-protocol source connection. Construct
 // with New; it starts connecting immediately in the background. Call
 // SendTaskEvent/SendMessageEvent for reliable events and SendMetric for
@@ -142,7 +151,7 @@ func (c *Client) SendTaskEvent(ev TaskEvent) error {
 			Display:    ev.Display,
 		}
 		if err := body.Validate(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %v", ErrInvalidBody, err)
 		}
 		return json.Marshal(body)
 	})
@@ -180,7 +189,7 @@ func (c *Client) SendMessageEvent(ev MessageEvent) error {
 			AutomationID: ev.AutomationID,
 		}
 		if err := body.Validate(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %v", ErrInvalidBody, err)
 		}
 		return json.Marshal(body)
 	})
