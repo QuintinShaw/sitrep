@@ -135,12 +135,15 @@ func TestRealtimeFlagOffPreservesExistingBehavior(t *testing.T) {
 	}
 }
 
-// TestOutboxFullFallsBackToHTTPAndRecovers pins the bounded-outbox policy
-// end to end: when the realtime outbox hits its row cap, further reliable
-// events fall back to the HTTP ingest path (reliability does not degrade,
-// disk usage stays bounded), and once acks drain the backlog the realtime
-// path takes over again.
-func TestOutboxFullFallsBackToHTTPAndRecovers(t *testing.T) {
+// TestOutboxFullNeverForksToHTTPAndRecovers pins the P0 fix: /v2 ingest
+// writes UserStore while /v3 viewers resume from SpaceHub, so a reliable
+// event (task.event/message.event) diverted to /v2 while the realtime flag
+// is on could permanently vanish from a viewer's resume. When the realtime
+// outbox hits its row cap, the overflow event must NOT reach the HTTP
+// ingest spy at all — it stays queued locally (bounded backpressure) and is
+// retried until Enqueue succeeds, then delivered over realtime in seq
+// order once acks drain the backlog.
+func TestOutboxFullNeverForksToHTTPAndRecovers(t *testing.T) {
 	var httpCap capture
 	httpSrv := httptest.NewServer(httpCap.handler(t))
 	defer httpSrv.Close()
@@ -226,23 +229,17 @@ func TestOutboxFullFallsBackToHTTPAndRecovers(t *testing.T) {
 	u.Offer(msg("first"))
 	waitForWS("first")
 
-	// 2. Second event: outbox is full -> ErrOutboxFull -> HTTP fallback.
+	// 2. Second event: outbox is full -> ErrOutboxFull. Per the P0 fix this
+	// must NOT fall back to HTTP; it is queued locally (Uplink.rtRetry) and
+	// retried every flush tick while the outbox stays full. Give it several
+	// flush intervals to (wrongly) reach HTTP if the fallback regressed,
+	// then assert it never did.
 	u.Offer(msg("second"))
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		found := false
-		for _, e := range httpCap.all() {
-			if e.Kind == protocol.MessageSend && e.Text == "second" {
-				found = true
-			}
+	time.Sleep(200 * time.Millisecond)
+	for _, e := range httpCap.all() {
+		if e.Kind == protocol.MessageSend && e.Text == "second" {
+			t.Fatalf("HTTP ingest carried the overflow event %q while the outbox was full — reliable events must never fork off the realtime path", e.Text)
 		}
-		if found {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("HTTP ingest never carried the overflow event while the outbox was full")
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
 
 	// 3. The server starts acking; the resend loop replays "first", it gets
@@ -264,13 +261,19 @@ func TestOutboxFullFallsBackToHTTPAndRecovers(t *testing.T) {
 		return err == nil && n == 0
 	})
 
-	// 4. With capacity restored, the realtime path takes over again.
+	// 4. Once the outbox drains, the locally-queued "second" event's retry
+	// succeeds and it is delivered over realtime — never having touched
+	// HTTP — in the correct seq order (it was offered before "third").
+	waitForWS("second")
+
+	// 5. With capacity restored, the realtime path continues to take
+	// subsequent events.
 	u.Offer(msg("third"))
 	waitForWS("third")
 
-	// "first" and "third" must never have gone over HTTP.
+	// None of these reliable events may ever have gone over HTTP.
 	for _, e := range httpCap.all() {
-		if e.Kind == protocol.MessageSend && e.Text != "second" {
+		if e.Kind == protocol.MessageSend {
 			t.Fatalf("HTTP ingest carried %q, which should have traveled the realtime path only", e.Text)
 		}
 	}
