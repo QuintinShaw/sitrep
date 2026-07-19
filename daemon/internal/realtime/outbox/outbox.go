@@ -108,6 +108,18 @@ func Open(path string) (*Store, error) {
 // OpenWithMaxRows is Open with an explicit row cap; maxRows <= 0 falls
 // back to DefaultMaxRows.
 func OpenWithMaxRows(path string, maxRows int) (*Store, error) {
+	return openWithBusyTimeoutMS(path, maxRows, 5000)
+}
+
+// openWithBusyTimeoutMS is OpenWithMaxRows with the SQLite busy_timeout
+// pragma exposed, in milliseconds. Production always goes through
+// OpenWithMaxRows (5000ms, see the _txlock=immediate comment below); this
+// exists as a same-package test seam so a test can drive a genuinely fast
+// SQLITE_BUSY through enqueueAttempt's own bounded retry loop (see
+// enqueueMaxAttempts) with a short busy_timeout, rather than needing to hold
+// a competing write lock for the real 5s default just to prove that retry
+// path recovers a transient error.
+func openWithBusyTimeoutMS(path string, maxRows, busyTimeoutMS int) (*Store, error) {
 	if maxRows <= 0 {
 		maxRows = DefaultMaxRows
 	}
@@ -115,7 +127,7 @@ func OpenWithMaxRows(path string, maxRows int) (*Store, error) {
 	// first write, so two overlapping transactions serialize instead of
 	// racing to upgrade a deferred lock (SQLITE_BUSY under concurrent
 	// Enqueue calls from multiple goroutines).
-	dsn := path + "?_pragma=busy_timeout(5000)&_txlock=immediate"
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(%d)&_txlock=immediate", path, busyTimeoutMS)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("outbox: open %s: %w", path, err)

@@ -2,12 +2,14 @@ package outbox
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func open(t *testing.T) *Store {
@@ -479,5 +481,84 @@ func TestOverflowSurvivesCloseAndReopen(t *testing.T) {
 	}
 	if n, err := s2.OverflowCount(ctx); err != nil || n != 0 {
 		t.Fatalf("OverflowCount after ack+promotion = %d, %v, want 0", n, err)
+	}
+}
+
+// TestEnqueueRecoversFromRealTransientLockContention drives a genuine
+// SQLITE_BUSY through enqueueAttempt's own bounded retry loop
+// (enqueueMaxAttempts / enqueueRetryDelay) — not a fabricated send/build
+// callback error, but an actual second connection holding the write lock a
+// real Enqueue call has to wait out. It asserts the event still ends up
+// durable and readable (never dropped) once the lock clears within the
+// retry budget.
+//
+// A short busy_timeout (via the openWithBusyTimeoutMS test seam, rather
+// than production's 5000ms) keeps this fast: with the competing lock held
+// for holdDuration — comfortably inside the window of Enqueue's SECOND
+// attempt (busyTimeoutMS + enqueueRetryDelay through 2*busyTimeoutMS +
+// enqueueRetryDelay) and comfortably past its first (which must therefore
+// see a real SQLITE_BUSY and retry) — the first attempt is guaranteed to
+// fail on genuine lock contention, and the second is guaranteed to recover
+// once the lock actually releases, with margin on both sides against
+// scheduler jitter.
+func TestEnqueueRecoversFromRealTransientLockContention(t *testing.T) {
+	const busyTimeoutMS = 100
+	const holdDuration = 170 * time.Millisecond
+
+	path := filepath.Join(t.TempDir(), "outbox.db")
+
+	s, err := openWithBusyTimeoutMS(path, DefaultMaxRows, busyTimeoutMS)
+	if err != nil {
+		t.Fatalf("openWithBusyTimeoutMS: %v", err)
+	}
+	defer s.Close()
+
+	// A second, independent connection to the same database file. Its own
+	// BEGIN (immediate, via the same _txlock=immediate DSN param
+	// OpenWithMaxRows itself relies on) genuinely acquires SQLite's write
+	// lock — this is real lock contention, not a simulated error.
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(%d)&_txlock=immediate", path, busyTimeoutMS)
+	contender, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open contender connection: %v", err)
+	}
+	defer contender.Close()
+	contender.SetMaxOpenConns(1)
+
+	lockTx, err := contender.Begin()
+	if err != nil {
+		t.Fatalf("contender BEGIN IMMEDIATE: %v", err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(holdDuration)
+		if err := lockTx.Commit(); err != nil {
+			t.Errorf("contender commit: %v", err)
+		}
+		close(released)
+	}()
+	t.Cleanup(func() { <-released })
+
+	start := time.Now()
+	item, err := s.Enqueue(context.Background(), "space-a", "message.event", bodyFor(0))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Enqueue: %v (expected it to recover once the competing lock released after %v; Enqueue took %v)", err, holdDuration, elapsed)
+	}
+	if item.DeviceSeq != 1 {
+		t.Fatalf("Enqueue seq = %d, want 1", item.DeviceSeq)
+	}
+	if elapsed < holdDuration {
+		t.Fatalf("Enqueue returned after %v, before the competing lock even released at %v — contention was never actually exercised", elapsed, holdDuration)
+	}
+
+	// Durable and readable, not silently dropped.
+	pending, err := s.Pending(context.Background(), "space-a")
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(pending) != 1 || pending[0].DeviceSeq != 1 {
+		t.Fatalf("Pending = %+v, want exactly the one durably-enqueued event", pending)
 	}
 }
