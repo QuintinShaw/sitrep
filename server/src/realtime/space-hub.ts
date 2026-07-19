@@ -77,6 +77,12 @@ export class SpaceHub extends DurableObject<Env> {
    * accounting) — deliberately in-memory only, never written to SQLite. */
   private metricsCache = new Map<string, MetricSample>();
   private rateLimiters = new WeakMap<WebSocket, RateLimiterState>();
+  private hotPathCounter = 0;
+
+  /** Injectable for tests: decides whether the Nth hot-path event gets
+   * logged. Default samples at <=1%. Errors always log regardless of this
+   * (see logAlways) — only routine per-frame hot-path logging is sampled. */
+  logSampler: (n: number) => boolean = (n) => n % 100 === 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -850,7 +856,10 @@ export class SpaceHub extends DurableObject<Env> {
   }
 
   private logHotPath(event: string, data: Record<string, unknown>): void {
-    console.log(JSON.stringify({ level: "info", event, ...data, ts: Date.now() }));
+    this.hotPathCounter++;
+    if (this.logSampler(this.hotPathCounter)) {
+      console.log(JSON.stringify({ level: "info", event, ...data, ts: Date.now() }));
+    }
   }
 
   private logAlways(event: string, data: Record<string, unknown>): void {
