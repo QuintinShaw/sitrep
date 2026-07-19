@@ -1,0 +1,11 @@
+{
+  "type": "error",
+  "id": "dcs-env-05",
+  "ts": 1752486030020,
+  "body": {
+    "code": "superseded",
+    "message": "this device opened a newer connection; closing this one",
+    "retryable": false,
+    "fatal": true
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "type": "snapshot",
+  "id": "crg-env-06",
+  "ts": 1752483000030,
+  "body": {
+    "revision": 150,
+    "part": 1,
+    "final": false,
+    "tasks": [
+      {
+        "task_id": "run-2f9a",
+        "device_id": "mac-quintin-01",
+        "title": "Nightly backup",
+        "state": "done",
+        "percent": 100,
+        "updated_at": 1752482990000
+      }
+    ],
+    "metrics": [],
+    "messages": [],
+    "automations": [
+      {
+        "automation_id": "auto-disk-watch",
+        "name": "Disk space watch",
+        "executor_kind": "script",
+        "schedule": { "kind": "interval", "every_seconds": 300 },
+        "state": "active",
+        "last_run_at": 1752482900000
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "sender_role": "viewer",
+  "frame": {
+    "type": "command",
+    "id": "01H9Z0X8K3F0T3B0S0V0W0X3F0",
+    "ts": 1752480020000,
+    "body": {
+      "command_id": "cmd-forged-throttle",
+      "origin": "server",
+      "action": "throttle",
+      "ttl_ms": 3600000
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "type": "error",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X1G2",
+  "ts": 1752480080000,
+  "body": {
+    "code": "superseded",
+    "message": "this device opened a newer connection; closing this one",
+    "retryable": false,
+    "fatal": true
+  }
+}

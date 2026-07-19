@@ -1,0 +1,24 @@
+{
+  "type": "snapshot",
+  "id": "crg-env-07",
+  "ts": 1752483000040,
+  "body": {
+    "revision": 150,
+    "part": 2,
+    "final": true,
+    "tasks": [],
+    "metrics": [
+      { "metric_id": "cpu.load", "value": "0.18", "ts": 1752483000000, "min": "0", "max": "8" }
+    ],
+    "messages": [
+      {
+        "message_id": "mac-quintin-01:120",
+        "device_id": "mac-quintin-01",
+        "level": "info",
+        "text": "Backup completed for volume Data",
+        "occurred_at": 1752482990000
+      }
+    ],
+    "automations": []
+  }
+}

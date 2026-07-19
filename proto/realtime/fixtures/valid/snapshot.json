@@ -4,6 +4,8 @@
   "ts": 1752480010200,
   "body": {
     "revision": 128,
+    "part": 1,
+    "final": true,
     "tasks": [
       {
         "task_id": "run-2f9a",
@@ -21,7 +23,10 @@
         "metric_id": "cpu.load",
         "value": "0.62",
         "label": "CPU load",
-        "ts": 1752480009800
+        "ts": 1752480009800,
+        "min": "0",
+        "max": "8",
+        "alert_above": "6"
       }
     ],
     "messages": [
@@ -31,6 +36,16 @@
         "level": "info",
         "text": "Backup completed for volume Data",
         "occurred_at": 1752479990000
+      }
+    ],
+    "automations": [
+      {
+        "automation_id": "auto-disk-watch",
+        "name": "Disk space watch",
+        "executor_kind": "script",
+        "schedule": { "kind": "interval", "every_seconds": 300 },
+        "state": "active",
+        "last_run_at": 1752480000000
       }
     ]
   }

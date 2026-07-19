@@ -1,0 +1,23 @@
+{
+  "type": "delta",
+  "id": "crd-env-07",
+  "ts": 1752482005000,
+  "body": {
+    "from_revision": 128,
+    "to_revision": 129,
+    "events": [
+      {
+        "event_type": "task.event",
+        "event": {
+          "device_id": "mac-quintin-01",
+          "device_seq": 57,
+          "task_id": "run-2f9a",
+          "kind": "progress",
+          "occurred_at": 1752482004900,
+          "percent": 60,
+          "step": "uploading archives"
+        }
+      }
+    ]
+  }
+}

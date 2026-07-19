@@ -3,7 +3,7 @@
   "id": "01H9Z0X8K3F0T3B0S0V0W0X0Y4",
   "ts": 1752480010400,
   "body": {
-    "from_revision": 126,
+    "from_revision": 125,
     "to_revision": 128,
     "events": [
       {
@@ -27,6 +27,21 @@
           "level": "info",
           "text": "Archive 3 of 5 uploaded",
           "occurred_at": 1752480006000
+        }
+      },
+      {
+        "event_type": "config.event",
+        "event": {
+          "kind": "automation.upserted",
+          "automation_id": "auto-disk-watch",
+          "automation": {
+            "automation_id": "auto-disk-watch",
+            "name": "Disk space watch",
+            "executor_kind": "script",
+            "schedule": { "kind": "interval", "every_seconds": 300 },
+            "state": "active"
+          },
+          "occurred_at": 1752480008000
         }
       }
     ]

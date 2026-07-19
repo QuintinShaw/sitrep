@@ -1,0 +1,11 @@
+{
+  "type": "hello",
+  "id": "dcs-env-02",
+  "ts": 1752486000010,
+  "body": {
+    "stage": "accept",
+    "protocol_version": 1,
+    "session_id": "sess-dcs-1",
+    "heartbeat_interval_ms": 20000
+  }
+}

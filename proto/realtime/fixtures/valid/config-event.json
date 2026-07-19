@@ -1,0 +1,18 @@
+{
+  "type": "config.event",
+  "id": "01H9Z0X8K3F0T3B0S0V0W0X1G0",
+  "ts": 1752480008100,
+  "body": {
+    "kind": "automation.upserted",
+    "automation_id": "auto-disk-watch",
+    "automation": {
+      "automation_id": "auto-disk-watch",
+      "name": "Disk space watch",
+      "executor_kind": "script",
+      "schedule": { "kind": "interval", "every_seconds": 300 },
+      "state": "active",
+      "last_run_at": 1752480000000
+    },
+    "occurred_at": 1752480008000
+  }
+}

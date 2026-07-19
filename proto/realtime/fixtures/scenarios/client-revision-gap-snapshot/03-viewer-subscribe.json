@@ -1,0 +1,8 @@
+{
+  "type": "subscribe",
+  "id": "crg-env-03",
+  "ts": 1752483000015,
+  "body": {
+    "topics": ["task", "metric", "message"]
+  }
+}
