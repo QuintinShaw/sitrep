@@ -38,28 +38,14 @@ struct JoinView: View {
 
             Spacer()
 
-            VStack(spacing: 12) {
-                Button {
-                    present(.scanner)
-                } label: {
-                    Label("扫描连接码", systemImage: "camera.viewfinder")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-
-                Button {
-                    present(.manual)
-                } label: {
-                    Label("手动输入连接码", systemImage: "keyboard")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
+            // Deep-link and cold-start joins run with no sheet on screen
+            // (destination == nil), so this is the only place their
+            // progress or failure is ever visible.
+            if destination == nil {
+                deepLinkStatus
             }
-            .buttonBorderShape(.roundedRectangle(radius: 18))
-            .frame(maxWidth: .infinity)
-            .padding(.bottom, 12)
+
+            actionButtons
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
@@ -105,6 +91,49 @@ struct JoinView: View {
         .frame(maxWidth: .infinity)
     }
 
+    private var actionButtons: some View {
+        VStack(spacing: 12) {
+            Button {
+                present(.scanner)
+            } label: {
+                Label("扫描连接码", systemImage: "camera.viewfinder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
+            Button {
+                present(.manual)
+            } label: {
+                Label("手动输入连接码", systemImage: "keyboard")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+        }
+        .buttonBorderShape(.roundedRectangle(radius: 18))
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, 12)
+        .disabled(joining)
+    }
+
+    @ViewBuilder
+    private var deepLinkStatus: some View {
+        if joining {
+            ProgressView("正在连接…")
+                .padding(.bottom, 16)
+        } else if let error {
+            Label(error, systemImage: "exclamationmark.circle.fill")
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                .padding(.bottom, 16)
+        }
+    }
+
     @ViewBuilder
     private func destinationView(_ destination: Destination) -> some View {
         switch destination {
@@ -145,6 +174,10 @@ struct JoinView: View {
     }
 
     private func present(_ destination: Destination) {
+        // A join already in progress (e.g. from a deep link) owns the
+        // current error/joining state; don't let a stray tap reset it
+        // before that state has had a chance to be shown.
+        guard !joining else { return }
         error = nil
         self.destination = destination
     }
