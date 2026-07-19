@@ -8,10 +8,20 @@
 //      subdirectories under fixtures/scenarios/) MUST validate against the
 //      generic envelope schema AND against the specific messages/<type>.schema.json
 //      selected by its own `type` field. Any failure is a script failure.
-//   3. Every file under fixtures/invalid/**/*.json MUST fail validation
-//      against at least one of those two schemas. A fixture that validates
-//      cleanly is a script failure (it means the fixture no longer
-//      demonstrates the constraint its filename claims to).
+//   3. Every file under fixtures/invalid/**/*.json MUST be rejected, either
+//      by one of those two schemas or by the client-authorization matrix
+//      (SPEC.md section 10.1). A fixture that passes every check is a script
+//      failure (it means the fixture no longer demonstrates the constraint
+//      its filename claims to).
+//
+// Fixture forms:
+//   - A bare envelope object: schema-checked only.
+//   - A wrapper {"sender_role": "source"|"viewer", "frame": {...}}: the
+//     frame is schema-checked AND checked against the authorization matrix
+//     as if a client with that role had sent it. This form exists for
+//     constraints that are role-dependent rather than shape-dependent
+//     (e.g. a viewer sending a command with origin "server", which is a
+//     perfectly well-formed frame when the server sends it).
 //
 // Usage:
 //   npm install   (once, to materialize node_modules/ from package-lock.json)
@@ -74,6 +84,30 @@ for (const file of readdirSync(messagesDir).filter((f) => f.endsWith(".schema.js
 
 const envelopeSchema = ajv.getSchema("https://schema.sitrep.dev/realtime/v1/envelope.schema.json");
 
+// Client-side authorization matrix, mirroring SPEC.md section 10.1: the set
+// of message types each client role may SEND. snapshot/delta/config.event
+// are server-only in the client-send direction.
+const CLIENT_SEND_ALLOWED = {
+  source: new Set(["hello", "ack", "task.event", "message.event", "metric.frame", "error"]),
+  viewer: new Set(["hello", "resume", "subscribe", "unsubscribe", "interest.renew", "command", "error"]),
+};
+
+function authorizationErrors(role, frame) {
+  const errors = [];
+  const allowed = CLIENT_SEND_ALLOWED[role];
+  if (!allowed) {
+    errors.push(`[auth] unknown sender_role: ${JSON.stringify(role)}`);
+    return errors;
+  }
+  if (!allowed.has(frame?.type)) {
+    errors.push(`[auth] role "${role}" may not send ${JSON.stringify(frame?.type)}`);
+  }
+  if (frame?.type === "command" && frame?.body?.origin !== "viewer") {
+    errors.push(`[auth] a client may only send command with origin "viewer" (got ${JSON.stringify(frame?.body?.origin)})`);
+  }
+  return errors;
+}
+
 function validateFrame(frame) {
   const errors = [];
 
@@ -111,10 +145,23 @@ const validDir = path.join(fixturesDir, "valid");
 const scenariosDir = path.join(fixturesDir, "scenarios");
 const invalidDir = path.join(fixturesDir, "invalid");
 
+function unwrap(doc) {
+  if (doc && typeof doc === "object" && "frame" in doc && "sender_role" in doc) {
+    return { frame: doc.frame, senderRole: doc.sender_role };
+  }
+  return { frame: doc, senderRole: null };
+}
+
+function allErrors(doc) {
+  const { frame, senderRole } = unwrap(doc);
+  const errors = validateFrame(frame);
+  if (senderRole !== null) errors.push(...authorizationErrors(senderRole, frame));
+  return errors;
+}
+
 for (const file of [...walk(validDir), ...walk(scenariosDir)]) {
   checked++;
-  const frame = loadJson(file);
-  const errors = validateFrame(frame);
+  const errors = allErrors(loadJson(file));
   if (errors.length > 0) {
     failures++;
     console.error(`FAIL (expected valid): ${relative(file)}`);
@@ -126,8 +173,7 @@ for (const file of [...walk(validDir), ...walk(scenariosDir)]) {
 
 for (const file of walk(invalidDir)) {
   checked++;
-  const frame = loadJson(file);
-  const errors = validateFrame(frame);
+  const errors = allErrors(loadJson(file));
   if (errors.length === 0) {
     failures++;
     console.error(`FAIL (expected invalid, but it validated cleanly): ${relative(file)}`);
