@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -30,6 +31,15 @@ type Config struct {
 	// package derives from Server by default. Overridable with
 	// SITREP_REALTIME_URL.
 	RealtimeURL string `json:"realtime_url,omitempty"`
+
+	// OutboxMaxRows bounds the local realtime outbox's row count (see
+	// internal/realtime/outbox.DefaultMaxRows) — the point at which further
+	// reliable events must wait for local backpressure rather than being
+	// enqueued, because the outbox is the sole authority for realtime
+	// delivery while RealtimeEnabled is on (no legacy-HTTP fallback for
+	// those events; see internal/uplink.routeToRealtime). Zero/unset uses
+	// outbox.DefaultMaxRows. Overridable with SITREP_OUTBOX_MAX_ROWS.
+	OutboxMaxRows int `json:"outbox_max_rows,omitempty"`
 }
 
 func Path() string {
@@ -66,6 +76,11 @@ func Load() Config {
 	}
 	if v := os.Getenv("SITREP_REALTIME_URL"); v != "" {
 		cfg.RealtimeURL = v
+	}
+	if v := os.Getenv("SITREP_OUTBOX_MAX_ROWS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.OutboxMaxRows = n
+		}
 	}
 	return cfg
 }

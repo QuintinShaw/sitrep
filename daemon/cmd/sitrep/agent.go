@@ -108,7 +108,7 @@ func newAgentRealtimeUplink() *rtclient.Client {
 		fmt.Fprintln(os.Stderr, "sitrep agent: realtime uplink enabled but server/device_id/space is not configured; staying on HTTP ingest")
 		return nil
 	}
-	store, err := outbox.Open(config.RealtimeOutboxPath())
+	store, err := outbox.OpenWithMaxRows(config.RealtimeOutboxPath(), cfg.OutboxMaxRows)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sitrep agent: realtime outbox: %v; staying on HTTP ingest\n", err)
 		return nil

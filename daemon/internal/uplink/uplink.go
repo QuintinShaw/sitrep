@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/QuintinShaw/sitrep/daemon/internal/protocol"
 	rtclient "github.com/QuintinShaw/sitrep/daemon/internal/realtime/client"
+	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/outbox"
 	"github.com/QuintinShaw/sitrep/daemon/internal/realtime/wire"
 )
 
@@ -60,6 +62,11 @@ type Config struct {
 	// Nil (the default) preserves this package's exact prior behavior.
 	// The caller owns Realtime's lifecycle (construction and Close).
 	Realtime *rtclient.Client
+
+	// Logf is a pluggable logger for conditions worth surfacing but not
+	// worth failing on (e.g. a reliable event dropped because it could
+	// never validate). Nil discards.
+	Logf func(format string, args ...any)
 }
 
 type Uplink struct {
@@ -78,6 +85,14 @@ type Uplink struct {
 	kick    chan struct{}
 	done    chan struct{}
 
+	// rtRetry holds reliable events (task.event/message.event) whose
+	// enqueue into the realtime outbox hit outbox.ErrOutboxFull. They are
+	// retried, oldest first, on every flush tick until Enqueue succeeds —
+	// see routeToRealtime and retryRealtime. This is local backpressure,
+	// not a fallback: these events must not travel the legacy HTTP path
+	// while the realtime flag is on (see package doc on Config.Realtime).
+	rtRetry []func() error
+
 	ticksSinceSend int
 }
 
@@ -92,6 +107,9 @@ func New(cfg Config) *Uplink {
 	}
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = 10 * time.Second
+	}
+	if cfg.Logf == nil {
+		cfg.Logf = func(string, ...any) {}
 	}
 	u := &Uplink{
 		cfg:      cfg,
@@ -157,15 +175,15 @@ func (u *Uplink) Offer(ev Event) {
 // routeToRealtime translates ev into the matching realtime-protocol
 // message and hands it to the realtime client. It reports whether it
 // handled ev (true) so the caller skips the HTTP batch entirely for that
-// event, or leaves it (false) to fall through unchanged — either because
-// the kind has no realtime equivalent (task.log) or because the realtime
-// send itself failed, in which case losing the event silently would be
-// worse than a harmless duplicate over HTTP. In particular, a full
-// realtime outbox (outbox.ErrOutboxFull — the bounded local queue hit its
-// row cap because the server has not been acking) lands here as a send
-// failure: the event travels the HTTP ingest path instead, so reliability
-// does not degrade while local disk usage stays bounded, and once acks
-// drain the backlog subsequent events take the realtime path again.
+// event, or leaves it (false) to fall through unchanged — only because the
+// kind has no realtime equivalent (task.log).
+//
+// Reliable events (task.event/message.event) NEVER fall back to the legacy
+// /v2 HTTP path while the realtime flag is on, even when the send fails:
+// /v2 ingest writes UserStore, while /v3 viewers resume from SpaceHub, so
+// diverting so much as one terminal task.done/task.fail/message.send would
+// let a viewer permanently miss it. See sendReliable for what happens to a
+// send failure instead.
 func (u *Uplink) routeToRealtime(realtime *rtclient.Client, ev Event) bool {
 	switch ev.Kind {
 	case protocol.TaskStart, protocol.TaskProgress, protocol.TaskStep, protocol.TaskDone, protocol.TaskFail:
@@ -187,13 +205,14 @@ func (u *Uplink) routeToRealtime(realtime *rtclient.Client, ev Event) bool {
 		case protocol.TaskDone, protocol.TaskFail:
 			te.Message = ev.Text
 		}
-		return realtime.SendTaskEvent(te) == nil
+		return u.sendReliable(func() error { return realtime.SendTaskEvent(te) })
 	case protocol.MessageSend:
-		return realtime.SendMessageEvent(rtclient.MessageEvent{
+		me := rtclient.MessageEvent{
 			Level:      ev.Level,
 			Text:       ev.Text,
 			OccurredAt: parseEventTime(ev.TS),
-		}) == nil
+		}
+		return u.sendReliable(func() error { return realtime.SendMessageEvent(me) })
 	case protocol.MetricUpdate:
 		realtime.SendMetric(wire.MetricSample{
 			MetricID:   ev.Key,
@@ -210,6 +229,68 @@ func (u *Uplink) routeToRealtime(realtime *rtclient.Client, ev Event) bool {
 		return true // metric.frame is fire-and-forget; there is no failure to react to
 	default:
 		return false // e.g. task.log: no realtime-protocol equivalent
+	}
+}
+
+// sendReliable calls send() once and always reports "handled" (true) for a
+// reliable event — the caller (routeToRealtime) must never fall back to
+// HTTP for these, so there is nothing left for it to do with the return
+// value except decide whether to retry locally.
+//
+// On outbox.ErrOutboxFull (the bounded local queue hit its row cap because
+// the server has not been acking), send is queued for retry: local
+// backpressure, not a fallback. It is retried oldest-first on every flush
+// tick (retryRealtime) until Enqueue succeeds, which self-heals once acks
+// drain the backlog (SPEC.md section 5.3) — events already in the outbox
+// are durable in SQLite and replay in seq order on their own. FIFO order
+// matters here: device_seq is allocated only by a successful Enqueue, so
+// retrying anything but the oldest queued item first could hand a later
+// event a lower seq than an earlier one still waiting.
+//
+// Any other error (e.g. a malformed event failing wire validation) is not
+// a transient condition retrying would fix, and per the same no-fallback
+// rule it must not be forwarded to /v2 either — it is logged and dropped.
+func (u *Uplink) sendReliable(send func() error) bool {
+	if err := send(); err != nil {
+		if errors.Is(err, outbox.ErrOutboxFull) {
+			u.mu.Lock()
+			u.rtRetry = append(u.rtRetry, send)
+			u.mu.Unlock()
+			select {
+			case u.kick <- struct{}{}:
+			default:
+			}
+		} else {
+			u.cfg.Logf("uplink: dropping reliable event, realtime enqueue failed: %v", err)
+		}
+	}
+	return true
+}
+
+// retryRealtime re-attempts every event queued by sendReliable, oldest
+// first, stopping at the first one that still fails so order is preserved
+// (see sendReliable). Called once per flush tick from loop, so a drained
+// outbox flushes its whole backlog within one tick.
+func (u *Uplink) retryRealtime() {
+	for {
+		u.mu.Lock()
+		if len(u.rtRetry) == 0 {
+			u.mu.Unlock()
+			return
+		}
+		send := u.rtRetry[0]
+		u.mu.Unlock()
+
+		err := send()
+		if err != nil && errors.Is(err, outbox.ErrOutboxFull) {
+			return // still full; try again next tick
+		}
+		if err != nil {
+			u.cfg.Logf("uplink: dropping reliable event, realtime enqueue failed on retry: %v", err)
+		}
+		u.mu.Lock()
+		u.rtRetry = u.rtRetry[1:]
+		u.mu.Unlock()
 	}
 }
 
@@ -296,6 +377,7 @@ func (u *Uplink) loop() {
 		case <-ticker.C:
 		case <-u.kick:
 		}
+		u.retryRealtime()
 		batch, closed := u.drain()
 		if len(batch) > 0 {
 			u.send(batch)
