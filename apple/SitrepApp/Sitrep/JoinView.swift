@@ -160,7 +160,11 @@ struct JoinView: View {
         let payload = manualCode.trimmingCharacters(in: .whitespacesAndNewlines)
         if ConnectCode.parse(payload) != nil { return true }
         guard let components = URLComponents(string: payload) else { return false }
-        return components.scheme == "sitrep" && components.host == "join"
+        // Only scheme/host are normalized for comparison; query values keep
+        // their original case (autocapitalized manual typing can uppercase
+        // the whole string, but pasted links are already correctly cased).
+        return components.scheme?.lowercased() == "sitrep"
+            && components.host?.lowercased() == "join"
     }
 
     private func pasteCode() {
@@ -210,7 +214,7 @@ struct JoinView: View {
             return
         }
         if let comps = URLComponents(string: trimmed),
-           comps.scheme == "sitrep", comps.host == "join",
+           comps.scheme?.lowercased() == "sitrep", comps.host?.lowercased() == "join",
            let server = comps.queryItems?.first(where: { $0.name == "server" })?.value,
            let space = comps.queryItems?.first(where: { $0.name == "space" })?.value,
            let code = comps.queryItems?.first(where: { $0.name == "code" })?.value,
