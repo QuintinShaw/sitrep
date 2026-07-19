@@ -562,6 +562,15 @@ function mintResultResponse(c: any, result: { revision: number; automation: Auto
   return c.json({ revision: result.revision, automation: result.automation });
 }
 
+/** Deterministic automation_id for a POST that omitted one: SHA-256 of the
+ * Idempotency-Key, hex, truncated to 32 chars (fits the 1-128 char id cap
+ * and stays collision-safe for this cardinality). Same key -> same id, so
+ * a retried create replays instead of fingerprint-conflicting. */
+async function deriveAutomationId(idempotencyKey: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(idempotencyKey));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+}
+
 const internalError = (c: any, e: unknown) => {
   console.log(JSON.stringify({ level: "error", event: "v3_http_unhandled", message: String(e) }));
   return c.json({ error: "internal error" }, 500);
@@ -573,14 +582,27 @@ app.post("/v3/automations", async (c: any) => {
   const body = await c.req.json().catch(() => null);
   const parsed = parseAutomationUpsert(body);
   if (!parsed) return c.json({ error: "name, executor_kind and schedule.every_seconds required" }, 400);
+  const idempotencyKey = c.req.header("idempotency-key") ?? null;
+  // The idempotency fingerprint must cover only CLIENT-provided content: a
+  // server-generated random id would enter the fingerprint and make an
+  // honest retry of a dropped POST (same key, no explicit automation_id)
+  // fingerprint-mismatch into a spurious 409. When the client omits
+  // automation_id but supplies an Idempotency-Key, derive the id
+  // deterministically from that key, so the retry reconstructs the exact
+  // same automation (including its id) and replays cleanly.
+  const automationId =
+    typeof body.automation_id === "string" && body.automation_id
+      ? body.automation_id
+      : idempotencyKey
+        ? await deriveAutomationId(idempotencyKey)
+        : crypto.randomUUID();
   const automation: AutomationState = {
-    automation_id: typeof body.automation_id === "string" && body.automation_id ? body.automation_id : crypto.randomUUID(),
+    automation_id: automationId,
     name: parsed.name,
     executor_kind: parsed.executor_kind,
     schedule: { kind: "interval", every_seconds: parsed.every_seconds },
     state: body.state === "paused" ? "paused" : "active",
   };
-  const idempotencyKey = c.req.header("idempotency-key") ?? null;
   try {
     const stub = spaceHubStub(c.env as WorkerEnv, c.get("space"));
     const result = await stub.mintConfigEvent(idempotencyKey, {

@@ -70,6 +70,21 @@ interface RateLimiterState {
   frameTimestamps: number[];
 }
 
+/** Deterministic JSON with recursively sorted object keys, so two
+ * structurally-equal values always serialize identically regardless of
+ * property construction order. Used for idempotency fingerprints. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 export class SpaceHub extends DurableObject<Env> {
   /** Best-effort metric cache (SPEC.md section 6.2: snapshot.metrics is a
    * convenience cache, allowed to be empty/stale, outside space_revision
@@ -317,18 +332,27 @@ export class SpaceHub extends DurableObject<Env> {
    * discipline as applyReliableEvent — see the class-level comment.
    *
    * The idempotency key is bound to the request's CONTENT, not just its
-   * key string: the stored fingerprint is the canonical JSON of
+   * key string: the stored fingerprint is truly canonical JSON —
+   * recursively key-sorted (see canonicalJson), so it cannot drift if a
+   * caller's object-construction order ever changes — of
    * (kind, automation_id, automation), compared verbatim on a replay.
    * (Exact string comparison is strictly stronger than a hash and stays
    * synchronous — crypto.subtle.digest is async and would break the
    * single-transaction discipline.) A key reused for a DIFFERENT
    * operation returns { conflict: true } and mints nothing, instead of
-   * silently replaying the first operation's result. */
+   * silently replaying the first operation's result.
+   *
+   * Contract note: the fingerprint must cover only client-provided
+   * content. When the client omits automation_id on a create, the HTTP
+   * layer derives it deterministically from the Idempotency-Key BEFORE
+   * calling this method (see adapters/workers.ts deriveAutomationId), so
+   * an honest retry reconstructs the identical payload and replays with
+   * the originally-created automation_id rather than tripping a 409. */
   mintConfigEvent(
     idempotencyKey: string | null,
     payload: { kind: ConfigEventKind; automation_id: string; automation?: AutomationState },
   ): { revision: number; automation: AutomationState | null; conflict?: boolean } {
-    const fingerprint = JSON.stringify({
+    const fingerprint = canonicalJson({
       kind: payload.kind,
       automation_id: payload.automation_id,
       automation: payload.automation ?? null,

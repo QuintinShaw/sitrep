@@ -96,6 +96,37 @@ describe("/v3/automations control plane", () => {
     expect(body3.revision).toBe(body1.revision + 1);
   });
 
+  it("retrying a create WITHOUT an explicit automation_id under the same key replays the same automation, not 409", async () => {
+    const { ownerToken } = await bootstrapSpace();
+    const headers = {
+      authorization: `Bearer ${ownerToken}`,
+      "content-type": "application/json",
+      "idempotency-key": "req-serverid",
+    };
+    // No automation_id in the body: the server picks one — deterministically
+    // from the Idempotency-Key, so a retry of a dropped response must
+    // replay the original result (same automation_id, same revision).
+    const payload = JSON.stringify({ name: "no explicit id", executor_kind: "script", schedule: { every_seconds: 60 } });
+    const res1 = await SELF.fetch(`${ORIGIN}/v3/automations`, { method: "POST", headers, body: payload });
+    expect(res1.status).toBe(200);
+    const body1 = (await res1.json()) as { revision: number; automation: { automation_id: string } };
+    expect(body1.automation.automation_id.length).toBeGreaterThan(0);
+
+    const res2 = await SELF.fetch(`${ORIGIN}/v3/automations`, { method: "POST", headers, body: payload });
+    expect(res2.status).toBe(200);
+    const body2 = (await res2.json()) as { revision: number; automation: { automation_id: string } };
+    expect(body2.revision).toBe(body1.revision);
+    expect(body2.automation.automation_id).toBe(body1.automation.automation_id);
+
+    // Same key with DIFFERENT client content still conflicts.
+    const res3 = await SELF.fetch(`${ORIGIN}/v3/automations`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "changed content", executor_kind: "script", schedule: { every_seconds: 5 } }),
+    });
+    expect(res3.status).toBe(409);
+  });
+
   it("role matrix: viewer may PATCH and DELETE but not POST", async () => {
     const { viewer, ownerToken } = await bootstrapSpace();
     // Owner creates two automations for the viewer to act on.
