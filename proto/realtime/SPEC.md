@@ -580,7 +580,7 @@ two distinct origins that share one envelope type:
 
 Per-action required-field matrix — the command names the exact object it
 operates on, aligning with the HTTP control surface
-(`POST /v2/tasks/:id/commands`):
+(`POST /v1/tasks/:id/commands`):
 
 | `action` | `origin` | required object field | forbidden object field |
 |---|---|---|---|

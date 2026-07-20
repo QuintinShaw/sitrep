@@ -78,6 +78,6 @@ The daemon stamps every event with:
 - `source_id`: run ID for a task, or `a<automation-id>` for scheduled work.
 - `ts`: RFC 3339 timestamp.
 
-It batches events to `POST /v2/ingest`. Progress and metric bursts are
+It batches events to `POST /v1/events`. Progress and metric bursts are
 coalesced to the latest value per source/metric within one second; messages
 and lifecycle changes are never coalesced.

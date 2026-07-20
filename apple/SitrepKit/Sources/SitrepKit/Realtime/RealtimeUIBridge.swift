@@ -5,7 +5,7 @@ import Foundation
 // AutomationInfo), so SitrepApp's views keep reading the same types whether
 // their data came from an HTTP snapshot or from `SpaceState`. This mirrors
 // the existing `SnapshotMetric.state`/`SnapshotMessage.state` adapters in
-// Models.swift, which do the equivalent job for the REST `/v2/snapshot`
+// Models.swift, which do the equivalent job for the REST `/v1/snapshot`
 // response shape.
 
 private extension Date {

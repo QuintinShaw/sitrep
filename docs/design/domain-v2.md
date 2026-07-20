@@ -45,9 +45,14 @@ Read/remind is the first security tier. Purchase, posting, destructive actions
 and general computer control require a later permission model and are outside
 the initial product scope.
 
-## Migration
+## Read model
 
-`GET /v2/snapshot` is the only read model for new Apple clients. It adapts old
-storage without exposing global parameters, armed alerts, commands or inferred
-relationships. Existing pairing credentials and useful history remain valid;
-unowned legacy parameters disappear instead of being guessed into the UI.
+`GET /v1/snapshot` (see `v1-architecture.md` §2) is the read model for Apple
+clients. It exposes only owned domain objects — no global parameters, armed
+alerts, commands or inferred relationships. Anything without an explicit owner
+per the model above stays out of the UI instead of being guessed into it.
+
+> Historical note: this document predates the v1 unified architecture. The
+> domain model itself (tasks/metrics/messages and their ownership rules) is
+> still current; any route or storage specifics are superseded by
+> `v1-architecture.md`.
