@@ -1,0 +1,110 @@
+{
+  "description": "POST /v1/automations with Idempotency-Key — role: owner. Demonstrates config.event minting, revision advancement, idempotent replay, and the 409 fingerprint-conflict case. Matches v1-architecture.md §4.2/§5/§6 and openapi.yaml #/components/responses/IdempotencyConflict.",
+
+  "first_request": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/automations",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+        "idempotency-key": "create-nightly-build-2026-07-19",
+        "content-type": "application/json"
+      },
+      "body": {
+        "name": "Nightly build",
+        "executor_kind": "script",
+        "schedule": { "every_seconds": 86400 }
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "revision": 130,
+        "automation": {
+          "automation_id": "96b0d50209e2b3162c39996341373146",
+          "name": "Nightly build",
+          "executor_kind": "script",
+          "schedule": { "kind": "interval", "every_seconds": 86400 },
+          "state": "active",
+          "run_request_id": 0,
+          "run_requested_at": null
+        }
+      }
+    },
+    "note": "automation_id was omitted from the request body, so it was derived deterministically from the Idempotency-Key (SHA-256, hex, first 32 chars — v1-architecture.md §4.2). Concretely: SHA-256('create-nightly-build-2026-07-19') = 96b0d50209e2b3162c39996341373146fc19723280ed8502854a854b288c5c90, and the id is its first 32 hex chars, 96b0d50209e2b3162c39996341373146. space_revision advanced by exactly 1 (129 -> 130), same as a task.event or message.event would."
+  },
+
+  "replay_same_key_same_body": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/automations",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+        "idempotency-key": "create-nightly-build-2026-07-19",
+        "content-type": "application/json"
+      },
+      "body": {
+        "name": "Nightly build",
+        "executor_kind": "script",
+        "schedule": { "every_seconds": 86400 }
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "revision": 130,
+        "automation": {
+          "automation_id": "96b0d50209e2b3162c39996341373146",
+          "name": "Nightly build",
+          "executor_kind": "script",
+          "schedule": { "kind": "interval", "every_seconds": 86400 },
+          "state": "active",
+          "run_request_id": 0,
+          "run_requested_at": null
+        }
+      }
+    },
+    "note": "Identical response, including the same revision (130, NOT 131) — no second config.event was minted. This is the 'safe to retry a lost 200' case."
+  },
+
+  "replay_same_key_different_body_409": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/automations",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+        "idempotency-key": "create-nightly-build-2026-07-19",
+        "content-type": "application/json"
+      },
+      "body": {
+        "name": "Nightly build (retimed)",
+        "executor_kind": "script",
+        "schedule": { "every_seconds": 43200 }
+      }
+    },
+    "response": {
+      "status": 409,
+      "body": {
+        "error": "idempotency key was already used for a different operation"
+      }
+    },
+    "note": "Same Idempotency-Key, different canonical-JSON fingerprint (name and every_seconds both changed) -> 409, mints nothing. The client must pick a fresh Idempotency-Key for a genuinely different operation."
+  },
+
+  "patch_not_found_404": {
+    "request": {
+      "method": "PATCH",
+      "path": "/v1/automations/does-not-exist",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7",
+        "content-type": "application/json"
+      },
+      "body": { "state": "paused" }
+    },
+    "response": {
+      "status": 404,
+      "body": { "error": "not found" }
+    },
+    "note": "Existence is checked BEFORE minting — a PATCH/DELETE against a nonexistent automation must not burn a revision on a no-op config.event (v1-architecture.md §5). Caller here is the viewer device from join.json; PATCH/DELETE/POST-run are the automation routes viewers are allowed to call, POST-create is owner-only (v1-architecture.md §3)."
+  }
+}

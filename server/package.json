@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "dev:node": "node --experimental-strip-types src/adapters/node.ts",
-    "test": "node --experimental-strip-types --test test/**/*.test.ts",
+    "test:unit": "node --experimental-strip-types --test \"test/**/*.test.ts\"",
+    "test:workers": "vitest run",
+    "test": "npm run test:unit && npm run test:workers",
     "typecheck": "tsc --noEmit",
     "deploy": "wrangler deploy"
   },
@@ -14,9 +15,10 @@
     "hono": "^4.12.30"
   },
   "devDependencies": {
-    "@hono/node-server": "^1.19.0",
+    "@cloudflare/vitest-pool-workers": "^0.18.6",
     "@types/node": "^26.1.1",
     "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
     "wrangler": "^4.112.0"
   }
 }

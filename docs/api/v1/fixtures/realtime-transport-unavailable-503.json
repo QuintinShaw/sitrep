@@ -1,0 +1,35 @@
+{
+  "description": "GET /v1/realtime with WS_TRANSPORT_ENABLED=false. Returns 503, never 403 — this is a transport/availability fact, not an authorization failure; the same bearer token would be accepted by every other /v1 route. Matches v1-architecture.md §8.1 and openapi.yaml #/components/responses/TransportUnavailable.",
+  "request": {
+    "method": "GET",
+    "path": "/v1/realtime",
+    "headers": {
+      "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+      "upgrade": "websocket",
+      "connection": "Upgrade",
+      "sec-websocket-version": "13",
+      "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ=="
+    }
+  },
+  "response": {
+    "status": 503,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": "transport_unavailable"
+    }
+  },
+  "paired_snapshot_state": {
+    "description": "Immediately before/after this call, GET /v1/snapshot with the same token returns capabilities.ws_transport_enabled: false and still fully serves space state — it is not affected by the switch.",
+    "capabilities": {
+      "ws_transport_enabled": false,
+      "apns_delivery_enabled": true,
+      "protocol_versions": [1]
+    }
+  },
+  "notes": [
+    "A client seeing 503 should fall back to POST /v1/events + polling GET /v1/snapshot, not treat its credential as bad.",
+    "POST /v1/automations and POST /v1/events are unaffected by this switch — v1-architecture.md §8.1 explicitly removes the old /v3/automations realtimeDisabled() 403 gate; only the WS upgrade itself is gated."
+  ]
+}

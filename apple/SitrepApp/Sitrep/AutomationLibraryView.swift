@@ -107,7 +107,7 @@ struct AutomationLibraryView: View {
     private func run(_ automation: AutomationInfo) {
         runningID = automation.id
         Task {
-            try? await model.client?.patchAutomation(id: automation.id, runNow: true)
+            try? await model.client?.runAutomation(id: automation.id)
             try? await Task.sleep(for: .milliseconds(700))
             await model.refresh()
             runningID = nil

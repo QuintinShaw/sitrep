@@ -1,0 +1,70 @@
+{
+  "description": "GET /v1/snapshot — role: viewer/owner. Full folded state plus space_revision and transport capabilities. Matches openapi.yaml #/components/schemas/Snapshot and v1-architecture.md §7/§8.",
+  "request": {
+    "method": "GET",
+    "path": "/v1/snapshot",
+    "headers": {
+      "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "space_revision": 129,
+      "generated_at": "2026-07-19T10:00:00.000Z",
+      "capabilities": {
+        "ws_transport_enabled": true,
+        "apns_delivery_enabled": true,
+        "protocol_versions": [1]
+      },
+      "presence": {
+        "ingest_last_seen": 1784476800100,
+        "agent_last_seen": 1784476790000,
+        "sources_online": 1
+      },
+      "tasks": [
+        {
+          "task_id": "build-release-3.2",
+          "device_id": "dev_own_8f2a1c",
+          "title": "Build release 3.2",
+          "state": "running",
+          "percent": 67,
+          "step": "linking",
+          "updated_at": 1784476800100
+        }
+      ],
+      "metrics": [
+        { "metric_id": "cpu.load1", "value": "2.34", "ts": 1784476800100 }
+      ],
+      "messages": [
+        {
+          "message_id": "msg_7a3f9c1e",
+          "device_id": "dev_own_8f2a1c",
+          "level": "warn",
+          "text": "disk usage above 85% during build",
+          "occurred_at": 1784476800100
+        }
+      ],
+      "automations": [
+        {
+          "automation_id": "nightly-build",
+          "name": "Nightly build",
+          "executor_kind": "script",
+          "schedule": { "kind": "interval", "every_seconds": 86400 },
+          "state": "active",
+          "last_run_at": 1784390400000,
+          "run_request_id": 0,
+          "run_requested_at": null
+        }
+      ]
+    }
+  },
+  "notes": [
+    "capabilities.ws_transport_enabled reflects WS_TRANSPORT_ENABLED — see realtime-transport-unavailable-503.json for the paired case where this is false and GET /v1/realtime rejects the upgrade.",
+    "metrics is a best-effort cache (proto/realtime/SPEC.md §6.2) — may be empty or stale after a DO restart, independent of space_revision.",
+    "A client bootstrapping over HTTP then resuming over WS sends resume{last_revision: 129} after hello->subscribe, per v1-architecture.md §7."
+  ]
+}

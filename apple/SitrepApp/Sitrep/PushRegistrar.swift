@@ -14,14 +14,6 @@ actor PushRegistrar {
     private var client: APIClient?
     private var started = false
 
-    private static let deviceID: String = {
-        let key = "sitrep.deviceID"
-        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
-        let fresh = UUID().uuidString
-        UserDefaults.standard.set(fresh, forKey: key)
-        return fresh
-    }()
-
     private var lastPushToStartToken: String?
 
     func configure(client: APIClient?) {
@@ -29,10 +21,7 @@ actor PushRegistrar {
         self.client = client
         // If the token arrived before credentials were saved, re-upload now.
         if !hadClient, client != nil, let token = lastPushToStartToken {
-            Task { await self.upload("/v2/devices", [
-                "device_id": Self.deviceID,
-                "push_to_start_token": token,
-            ]) }
+            Task { await self.uploadPushTokens(pushToStartToken: token) }
         }
     }
 
@@ -43,7 +32,7 @@ actor PushRegistrar {
         // subscription (e.g. after reinstall) — read it explicitly first.
         if let current = Activity<TaskActivityAttributes>.pushToStartToken {
             lastPushToStartToken = current.hexString
-            Task { await self.uploadPushToStartToken(current.hexString) }
+            Task { await self.uploadPushTokens(pushToStartToken: current.hexString) }
         }
         Task { await self.observePushToStartToken() }
         Task { await self.observeActivities() }
@@ -70,23 +59,32 @@ actor PushRegistrar {
     private func observePushToStartToken() async {
         for await tokenData in Activity<TaskActivityAttributes>.pushToStartTokenUpdates {
             lastPushToStartToken = tokenData.hexString
-            await uploadPushToStartToken(tokenData.hexString)
+            await uploadPushTokens(pushToStartToken: tokenData.hexString)
         }
-    }
-
-    private func uploadPushToStartToken(_ hex: String) async {
-        await upload("/v2/devices", [
-            "device_id": Self.deviceID,
-            "push_to_start_token": hex,
-        ])
     }
 
     /// Regular APNs device token, used for message notifications.
     func uploadAlertToken(_ hex: String) async {
-        await upload("/v2/devices", [
-            "device_id": Self.deviceID,
-            "alert_token": hex,
-        ])
+        await uploadPushTokens(alertToken: hex)
+    }
+
+    /// `PUT /v1/devices/self/push-tokens` (v1-architecture.md §2.3): device-
+    /// level tokens, no `device_id` field — the target is always the
+    /// authenticated caller. This REPLACES the old `POST /v2/devices
+    /// {device_id, push_to_start_token?, alert_token?}` shape; the locally
+    /// generated `Self.deviceID` UUID is no longer sent (it was never this
+    /// space's real paired device id in the first place — the server
+    /// resolves identity from the bearer token now, closing exactly the
+    /// hole §2.3 describes).
+    private func uploadPushTokens(pushToStartToken: String? = nil, alertToken: String? = nil) async {
+        guard let client else { return }
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try? await Task.sleep(for: .seconds(Double(attempt) * 2))
+            }
+            if (try? await client.registerPushTokens(
+                pushToStartToken: pushToStartToken, alertToken: alertToken)) != nil { return }
+        }
     }
 
     private func observeActivities() async {
@@ -95,23 +93,23 @@ actor PushRegistrar {
         }
     }
 
+    /// `PUT /v1/tasks/:id/live-activity-token` (v1-architecture.md §2.3):
+    /// path carries the task id, body is `{token}` — replaces the old
+    /// `POST /v2/activities {source_id, token}` body form.
     private func observeActivityTokens(_ activity: Activity<TaskActivityAttributes>) async {
-        let sourceID = activity.attributes.sourceId
+        let taskID = activity.attributes.sourceId
         for await tokenData in activity.pushTokenUpdates {
-            await upload("/v2/activities", [
-                "source_id": sourceID,
-                "token": tokenData.hexString,
-            ])
+            await uploadLiveActivityToken(taskID: taskID, token: tokenData.hexString)
         }
     }
 
-    private func upload(_ path: String, _ body: [String: String]) async {
+    private func uploadLiveActivityToken(taskID: String, token: String) async {
         guard let client else { return }
         for attempt in 0..<3 {
             if attempt > 0 {
                 try? await Task.sleep(for: .seconds(Double(attempt) * 2))
             }
-            if (try? await client.post(path, body: body)) != nil { return }
+            if (try? await client.registerLiveActivityToken(taskID: taskID, token: token)) != nil { return }
         }
     }
 }

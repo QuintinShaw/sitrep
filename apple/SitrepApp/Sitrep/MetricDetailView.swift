@@ -337,7 +337,7 @@ struct MetricDetailView: View {
                 Spacer()
                 Button {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    Task { try? await model.client?.patchAutomation(id: w.id, runNow: true); await model.refresh() }
+                    Task { try? await model.client?.runAutomation(id: w.id); await model.refresh() }
                 } label: {
                     Label("立即更新", systemImage: "bolt.fill")
                         .font(.caption.weight(.semibold))

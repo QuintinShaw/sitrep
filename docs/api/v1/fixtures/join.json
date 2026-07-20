@@ -1,0 +1,46 @@
+{
+  "description": "POST /v1/join — unauthenticated. Redeems a single-use invite code minted by an owner device via POST /v1/invites. P0-6 self-routing (v1-architecture.md §10.5): `space` is REQUIRED — the Worker routes directly to that space's SpaceHub (env.SPACE_HUB.getByName(space)) with zero KV lookup. Here the client derived `space` by decoding the connect code's embedded space_id locally (chars [1..10], lowercased); the self-host deep-link path sends the identical shape with `space` taken straight from the URL instead. Matches openapi.yaml #/paths/~1v1~1join/post.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/join",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "code": "XK7M3QZX2VTQ7T9M2K4NZ",
+      "space": "k7m3qzx2vt",
+      "name": "Quintin's iPhone",
+      "platform": "ios"
+    }
+  },
+  "decode_note": "code = 'X' + space_id(10, uppercased) + secret(9) + 'Z'. Decoding 'XK7M3QZX2VTQ7T9M2K4NZ': chars[1..10] = 'K7M3QZX2VT' -> lowercased 'k7m3qzx2vt' == the space this device is joining (also sent explicitly as `space`, per the unified shape); chars[11..19] = 'Q7T9M2K4N' is the one-time secret the server looks up in the target SpaceHub's DeviceRegistry.invites (v1-architecture.md §10.5).",
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "token": "sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7",
+      "device_id": "dev_9c4e2b7a1f",
+      "role": "viewer",
+      "space_id": "k7m3qzx2vt"
+    }
+  },
+  "error_response_400_malformed_code": {
+    "description": "code fails the shape check (wrong length, missing/wrong X…Z anchors, or an out-of-alphabet character).",
+    "request_body": { "code": "not-a-real-code", "space": "k7m3qzx2vt" },
+    "status": 400,
+    "body": { "error": "malformed code" }
+  },
+  "error_response_400_space_mismatch": {
+    "description": "code's embedded space_id does not match the routed `space` field — e.g. a code pasted from a different space's invite, or a typo in a manually-entered space. Caught as defense-in-depth after the Worker has already routed on `space` (v1-architecture.md §10.5 step 3).",
+    "request_body": { "code": "XK7M3QZX2VTQ7T9M2K4NZ", "space": "othr5pace9x" },
+    "status": 400,
+    "body": { "error": "code does not match space" }
+  },
+  "error_response_404": {
+    "description": "Invite invalid, expired (>10 min), or already redeemed (single-use). The secret decoded from `code` was not found in the routed space's DeviceRegistry.invites.",
+    "status": 404,
+    "body": { "error": "invite invalid or expired" }
+  }
+}

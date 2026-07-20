@@ -25,7 +25,9 @@ struct MenuBarLabel: View {
 
     var body: some View {
         // The menu bar renders this as a template image + text.
-        if model.hasFailure {
+        if model.needsAttention {
+            // A task failure OR a local telemetry storage anomaly (N1) —
+            // either way the user should open the menu and look.
             Image(systemName: "exclamationmark.triangle.fill")
         } else if model.runningCount > 0 {
             HStack(spacing: 2) {

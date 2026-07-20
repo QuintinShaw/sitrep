@@ -40,7 +40,9 @@ Hard-won answers, mostly from building this. Symptoms first.
 
 - Server side: `npx wrangler tail --format pretty` — the DO logs every APNs
   push with its status (`apns update <id> p=45: 200`).
-- Registered tokens: `GET /debug/tokens` (admin auth required).
+- Registered devices: `GET /v1/devices` (any `viewer`/`owner` device token).
+  The legacy `GET /debug/tokens` / `AUTH_TOKEN` admin endpoint is removed in
+  v1 (`docs/design/v1-architecture.md` §10.4).
 - Device side: `brew install libimobiledevice && idevicesyslog | grep -iE
   "liveactivitiesd|apsd"` — shows budget decisions and push receipt.
 - Manual APNs push from a Mac: sign the ES256 JWT with node (`dsaEncoding:

@@ -19,7 +19,11 @@ enum Onboarding {
             let cfg = ClientConfig(
                 server: officialServer.absoluteString,
                 token: creds.ownerToken,
-                space: creds.spaceID
+                space: creds.spaceID,
+                // Persist the owner device_id (P0-1) so the CLI/agent sharing
+                // this config file scopes its POST /v1/events uplink to the
+                // same (device_id, space) the server minted.
+                deviceID: creds.deviceID
             )
             try cfg.save()
             return cfg

@@ -7,19 +7,27 @@ public struct ClientConfig: Codable, Sendable {
     public var server: String
     public var token: String?
     public var space: String?
+    /// The owner device's id from `POST /v1/spaces` (P0-1). `device_seq` is
+    /// scoped to `(device_id, space)`, so the CLI/agent that shares this
+    /// config file reads this to scope its `POST /v1/events` uplink. Written
+    /// here by the menu bar's first-launch space creation so the daemon
+    /// doesn't have to re-derive it.
+    public var deviceID: String?
     /// Read-side token for this machine's viewers (menu bar); falls back to
     /// `token` when absent (bootstrap/admin setups).
     public var viewerToken: String?
 
     enum CodingKeys: String, CodingKey {
         case server, token, space
+        case deviceID = "device_id"
         case viewerToken = "viewer_token"
     }
 
-    public init(server: String, token: String?, space: String? = nil, viewerToken: String? = nil) {
+    public init(server: String, token: String?, space: String? = nil, deviceID: String? = nil, viewerToken: String? = nil) {
         self.server = server
         self.token = token
         self.space = space
+        self.deviceID = deviceID
         self.viewerToken = viewerToken
     }
 

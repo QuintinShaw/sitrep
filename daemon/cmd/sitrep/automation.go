@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuintinShaw/sitrep/daemon/internal/api"
+	"github.com/QuintinShaw/sitrep/daemon/internal/config"
 )
 
 // cmdAutomation registers scheduled local executors. The server stores only
@@ -31,7 +32,24 @@ func cmdAutomation(args []string) {
 		if err := client.DeleteAutomation(args[1]); err != nil {
 			fatal(err)
 		}
+		// Drop the machine-local executor command too (v1 keeps the command
+		// out of the server's shared automation state).
+		_ = config.DeleteLocalAutomation(args[1])
 		fmt.Println("removed", args[1])
+	case "run":
+		if len(args) < 2 {
+			automationUsage()
+		}
+		client, err := api.FromConfig()
+		if err != nil {
+			fatal(err)
+		}
+		// Field-stamp trigger (NOT a command): sets run_requested_at; the
+		// resident agent runs it on its next poll (v1-architecture.md §5.1).
+		if err := client.RunAutomation(args[1]); err != nil {
+			fatal(err)
+		}
+		fmt.Println("run requested for", args[1])
 	default:
 		automationUsage()
 	}
@@ -41,7 +59,8 @@ func automationUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
   sitrep automation add --name <n> --executor <script|agent|hybrid> --every <30s|5m|1h> -- <command> [args...]
   sitrep automation list
-  sitrep automation rm <id>`)
+  sitrep automation rm <id>
+  sitrep automation run <id>`)
 	os.Exit(2)
 }
 
@@ -86,11 +105,21 @@ func automationAdd(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	automation, err := client.AddAutomation(name, executorKind, argv, int(every.Seconds()))
+	automation, err := client.AddAutomation(name, executorKind, int(every.Seconds()))
 	if err != nil {
 		fatal(err)
 	}
-	fmt.Printf("registered %q (id %s) · %s · every %s\n", automation.Name, automation.ID, executorKind, every)
+	// The executor command is machine-local in v1 (not part of the server's
+	// shared automation state) — store it keyed by the server-assigned id so
+	// the resident agent can join schedule/state with the local command.
+	if err := config.SaveLocalAutomation(automation.AutomationID, config.LocalAutomation{
+		Command:      argv,
+		ExecutorKind: executorKind,
+		Name:         name,
+	}); err != nil {
+		fatal(fmt.Errorf("save local command: %w", err))
+	}
+	fmt.Printf("registered %q (id %s) · %s · every %s\n", automation.Name, automation.AutomationID, executorKind, every)
 }
 
 func parseEvery(s string) (time.Duration, error) {
@@ -117,19 +146,25 @@ func automationList() {
 		fmt.Println("no automations registered")
 		return
 	}
+	// Last-run is tracked machine-locally in v1 (the daemon no longer stamps
+	// it server-side); prefer the local value, falling back to the server's
+	// last_run_at when present.
+	local := config.LoadLocalAutomations()
 	for _, automation := range automations {
-		state := "active"
-		if !automation.Enabled {
-			state = "paused"
+		state := automation.State
+		if state == "" {
+			state = "active"
+		}
+		lastRunMS := automation.LastRunAt
+		if la, ok := local[automation.AutomationID]; ok && la.LastRunAt > lastRunMS {
+			lastRunMS = la.LastRunAt
 		}
 		last := "never"
-		if automation.LastRun != "" {
-			if t, err := time.Parse(time.RFC3339, automation.LastRun); err == nil {
-				last = time.Since(t).Round(time.Second).String() + " ago"
-			}
+		if lastRunMS > 0 {
+			last = time.Since(time.UnixMilli(lastRunMS)).Round(time.Second).String() + " ago"
 		}
 		fmt.Printf("%s  %-20s %-7s every %-6s %-8s last run %s\n",
-			automation.ID, automation.Name, automation.ExecutorKind,
-			(time.Duration(automation.EveryS) * time.Second).String(), state, last)
+			automation.AutomationID, automation.Name, automation.ExecutorKind,
+			(time.Duration(automation.Schedule.EverySeconds) * time.Second).String(), state, last)
 	}
 }

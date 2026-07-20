@@ -213,10 +213,15 @@ struct JoinView: View {
 
     private func resolveJoin(payload: String) async {
         let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let code = ConnectCode.parse(trimmed) {
+        // Official-scan path: the code is self-routing (v1-architecture.md
+        // §10.5, P0-6) — decode it locally to get the real space_id instead
+        // of relying on any server-side lookup. This is the exact site a
+        // prior round left hardcoded to `space: nil`; decode failure here
+        // must NOT fall through to a join attempt.
+        if let decoded = try? ConnectCode.decode(trimmed) {
             await performJoin(
                 server: URL(string: "https://sitrep.quintinshaw.com")!,
-                space: nil, code: code
+                space: decoded.spaceID, code: decoded.code
             )
             return
         }
@@ -233,7 +238,7 @@ struct JoinView: View {
         error = "无法识别的连接码"
     }
 
-    private func performJoin(server: URL, space: String?, code: String) async {
+    private func performJoin(server: URL, space: String, code: String) async {
         defer { joining = false }
         do {
             let joined = try await APIClient.join(

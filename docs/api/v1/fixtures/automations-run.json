@@ -1,0 +1,59 @@
+{
+  "description": "POST /v1/automations/:id/run — role: viewer/owner. Increments the automation's monotonic run_request_id and returns 200 with NO body. NOT a command and NOT a state write: mints no config.event, does not advance space_revision, enqueues nothing in CommandStore (v1-architecture.md §5.1, P0-4). The resident agent runs it on the next GET /v1/automations poll when run_request_id advances. Matches openapi.yaml #/paths/~1v1~1automations~1{id}~1run/post.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/automations/96b0d50209e2b3162c39996341373146/run",
+    "headers": {
+      "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7",
+      "idempotency-key": "run-nightly-build-tap-2026-07-20T04:30"
+    }
+  },
+  "response": {
+    "status": 200,
+    "note": "No response body — run_request_id was incremented (here 4 -> 5). The optional Idempotency-Key dedups a network retry of THIS tap: replaying the same key returns 200 without a second increment."
+  },
+  "effect_visible_in_get_automations": {
+    "description": "Immediately after the run POST, GET /v1/automations shows the automation with the advanced run_request_id. The resident agent (which polls this route as its heartbeat) runs the automation because run_request_id (5) is strictly greater than its last-consumed in-memory value (4), then records 5. run_requested_at is display-only.",
+    "request": {
+      "method": "GET",
+      "path": "/v1/automations",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_d61e5188e9b109bf899f3de91cb2a1aa578a6ee437251e04"
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": [
+        {
+          "automation_id": "96b0d50209e2b3162c39996341373146",
+          "name": "Nightly build",
+          "executor_kind": "script",
+          "schedule": { "kind": "interval", "every_seconds": 86400 },
+          "state": "active",
+          "last_run_at": 1784390400000,
+          "run_request_id": 5,
+          "run_requested_at": 1784476900000
+        }
+      ]
+    }
+  },
+  "error_response_404_unknown_automation": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/automations/does-not-exist/run",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7"
+      }
+    },
+    "response": {
+      "status": 404,
+      "body": { "error": "not found" }
+    },
+    "note": "Existence is checked before writing, same discipline as PATCH/DELETE — incrementing run_request_id on a nonexistent automation is a 404, not a silent no-op."
+  },
+  "notes": [
+    "Caller is the viewer device from join.json — 'run' is one of the automation routes viewers may call (v1-architecture.md §3), reflecting pairing-and-control.md's 'the phone may also run, pause, reschedule or delete an existing automation'.",
+    "This is NOT a command: it does not go through CommandStore, WS command frames, or the POST /v1/events commands[] piggyback — those carry only task-scoped pause/resume/stop. run_now no longer exists in the command channel (v1-architecture.md §1.4, §5.1). This fix exists precisely because the resident agent never opens a WS, so a WS-only run_now command would never be claimed.",
+    "Exactly-once via a monotonic id, not a wall-clock (P0-4): the agent keys off run_request_id compared against fresh in-memory last-consumed state, so a short automation finishing between the 2s poll and the 10s config refresh cannot re-fire the same id. run_requested_at is display-only; the agent never keys off it. An optional Idempotency-Key makes a network retry of the same tap not double-increment; without it a retry just advances the counter and the agent still runs at most once per distinct id it observes."
+  ]
+}

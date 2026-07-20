@@ -1,0 +1,51 @@
+{
+  "description": "Contrasts 401 (token itself does not resolve to a device) against 403 (token resolves fine; resolved role is not permitted on this route). Matches v1-architecture.md §3 and openapi.yaml #/components/responses/Unauthorized, #/components/responses/Forbidden. Uses POST /v1/automations, which is owner only (excludes both viewer and source).",
+
+  "case_401_missing_bearer": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/automations",
+      "headers": { "content-type": "application/json" },
+      "body": { "name": "Nightly build", "executor_kind": "script", "schedule": { "every_seconds": 86400 } }
+    },
+    "response": {
+      "status": 401,
+      "body": { "error": "unauthorized" }
+    },
+    "note": "No Authorization header at all."
+  },
+
+  "case_401_revoked_token": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/automations",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_ed90ff09dace5faa8a327ae63d8098d41a4212d20033c171",
+        "content-type": "application/json"
+      },
+      "body": { "name": "Nightly build", "executor_kind": "script", "schedule": { "every_seconds": 86400 } }
+    },
+    "response": {
+      "status": 401,
+      "body": { "error": "unauthorized" }
+    },
+    "note": "Token hash no longer resolves to a live device row — this device was revoked via DELETE /v1/devices/:id, and revocation is effective on the very next request (v1-architecture.md §10.2). The credential is well-formed (matches the sr1 grammar) but its device record is gone."
+  },
+
+  "case_403_wrong_role": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/automations",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7",
+        "content-type": "application/json"
+      },
+      "body": { "name": "Nightly build", "executor_kind": "script", "schedule": { "every_seconds": 86400 } }
+    },
+    "response": {
+      "status": 403,
+      "body": { "error": "forbidden" }
+    },
+    "note": "Token resolves fine — this is the viewer device from join.json (dev_9c4e2b7a1f, role viewer). POST /v1/automations is owner only (v1-architecture.md §3); PATCH/DELETE would have succeeded for this same viewer token."
+  }
+}

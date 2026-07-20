@@ -1,0 +1,31 @@
+{
+  "description": "POST /v1/spaces — unauthenticated. Creates a space plus its owner device; returns space_id, device_id, and owner_token. Matches openapi.yaml #/paths/~1v1~1spaces/post and v1-architecture.md §2.2/§10.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/spaces",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "platform": "macos",
+      "name": "Quintin's MacBook Pro"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "space_id": "k7m3qzx2vt",
+      "device_id": "dev_own_8f2a1c",
+      "owner_token": "sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51"
+    }
+  },
+  "notes": [
+    "device_id is the owner device's id, minted + persisted server-side (P0-1). The creating Mac MUST keep it: device_seq is scoped to (device_id, space), so its subsequent POST /v1/events must carry this device_id in each event body. This is the same device_id used in events-post-ack.json.",
+    "As an owner device it is a source-superset (v1-architecture.md §3): the very same owner_token that created the space can immediately POST /v1/events to report tasks/metrics — the P0-1 defect was that it previously got 403 there.",
+    "owner_token's secret segment must be exactly 48 lowercase hex characters (24 random bytes) per the sr1 grammar in v1-architecture.md §10.1 — this fixture's example is illustrative length-correct hex, not a real credential.",
+    "space_id is the non-secret locator embedded in every token minted for this space; it is also the routing key for env.SPACE_HUB.getByName(space_id)."
+  ]
+}

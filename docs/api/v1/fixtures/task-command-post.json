@@ -1,0 +1,48 @@
+{
+  "description": "POST /v1/tasks/:id/commands — role: viewer/owner. Viewer-issued reverse control, relayed live to a connected source or persisted in CommandStore.pending_commands otherwise (v1-architecture.md §1.4, §3). Shows the optional Idempotency-Key/command_id and ttl_ms override.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/tasks/build-release-3.2/commands",
+    "headers": {
+      "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7",
+      "idempotency-key": "pause-build-release-3.2-tap1",
+      "content-type": "application/json"
+    },
+    "body": {
+      "action": "pause"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": { "ok": true }
+  },
+  "request_with_ttl_override": {
+    "description": "Optional ttl_ms overrides the 60000 default (v1-architecture.md §6, openapi ttl_ms range 1..86400000).",
+    "request": {
+      "method": "POST",
+      "path": "/v1/tasks/build-release-3.2/commands",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7",
+        "content-type": "application/json"
+      },
+      "body": {
+        "action": "stop",
+        "ttl_ms": 120000
+      }
+    },
+    "response": { "status": 200, "body": { "ok": true } }
+  },
+  "error_response_400_invalid_action": {
+    "request_body": { "action": "cancel" },
+    "response": {
+      "status": 400,
+      "body": { "error": "invalid action" }
+    },
+    "note": "action must be one of pause | resume | stop — v2's action set is unchanged in v1."
+  },
+  "notes": [
+    "Field mapping (v1-architecture.md §4.4): the server builds the WS command body with task_id from the PATH param (build-release-3.2) and issued_by_device_id from the AUTHENTICATED identity — never from the request body. The body carries only action, and optionally ttl_ms and command_id.",
+    "Idempotency (v1-architecture.md §6, R-command-idem): the optional Idempotency-Key header (or a body command_id) is mapped to the WS command_id, so a retried POST with the same key does not enqueue a second command. ttl_ms defaults to 60000 ms when omitted.",
+    "Effect is observed indirectly: the source acting on this command surfaces as a subsequent task.event (e.g. no further progress events after pause), never as a direct 'command succeeded' payload on this response — this mirrors proto/realtime/SPEC.md §8's 'no separate command result message type' rule."
+  ]
+}

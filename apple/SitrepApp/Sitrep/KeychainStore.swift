@@ -3,7 +3,10 @@ import Security
 
 /// Minimal keychain string storage. Unlike UserDefaults / the App Group
 /// container, keychain items survive app reinstalls — dev builds and app
-/// updates keep their server credentials.
+/// updates keep their server credentials. The stored `token` is a v1
+/// `sr1_<space_id>_<secret>` bearer credential (v1-architecture.md §10);
+/// this layer treats it as an opaque string end to end — no client-side
+/// format parsing or `st2_`-era regex lives anywhere in this app.
 enum KeychainStore {
     private static let service = "dev.sitrep.app.credentials"
 

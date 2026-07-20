@@ -1,0 +1,33 @@
+{
+  "description": "The two message-delete routes — role: viewer/owner. DELETE /v1/messages/:id (one id) and DELETE /v1/messages (clear all), the split successors to the old POST /v2/messages/delete {ids:[...]} / {all:true} body form (v1-architecture.md §2.3, §3). Both are idempotent.",
+
+  "delete_one_by_id": {
+    "request": {
+      "method": "DELETE",
+      "path": "/v1/messages/msg_7a3f9c1e",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7"
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": { "ok": true }
+    },
+    "note": "Deleting an already-gone id returns the same 200 {ok:true} — idempotent by construction (v1-architecture.md §6)."
+  },
+
+  "clear_all": {
+    "request": {
+      "method": "DELETE",
+      "path": "/v1/messages",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7"
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": { "ok": true }
+    },
+    "note": "No path id = clear the whole (bounded, 200-row) message history. Clearing an already-empty history is also 200 {ok:true}."
+  }
+}

@@ -764,7 +764,7 @@ See `fixtures/scenarios/duplicate-connection-supersede/`.
 
 ## 10. Authentication boundary
 
-The credential (a `st2_<space>_<secret>` token, or an equivalent a future
+The credential (a `sr1_<space>_<secret>` token, or an equivalent a future
 transport might use) is presented **once, at transport/connection
 establishment** — e.g. as a WebSocket upgrade header or query parameter, or
 whatever the concrete transport's native mechanism for out-of-band

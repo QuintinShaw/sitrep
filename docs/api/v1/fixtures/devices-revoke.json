@@ -1,0 +1,33 @@
+{
+  "description": "DELETE /v1/devices/:id — role: viewer/owner. Revokes a device AND force-closes every live WS for that device in the same operation (v1-architecture.md §10.2, owner ruling B4). Matches openapi.yaml #/paths/~1v1~1devices~1{id}/delete.",
+  "request": {
+    "method": "DELETE",
+    "path": "/v1/devices/dev_9c4e2b7a1f",
+    "headers": {
+      "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": { "ok": true }
+  },
+  "side_effect_force_close": {
+    "description": "In the same operation, for every socket in ctx.getWebSockets('dev_9c4e2b7a1f'), the server sends this error envelope and then closes the connection (WS close code 1008). This is what the revoked device sees on its still-open socket — it does NOT get to keep streaming until its next HTTP request.",
+    "ws_frame_sent_then_close": {
+      "type": "error",
+      "id": "01J8XA0R7M2K4N8P1R6WZ3B7CY",
+      "ts": 1784476860000,
+      "body": {
+        "code": "unauthenticated",
+        "message": "device credential was revoked",
+        "retryable": false,
+        "fatal": true
+      }
+    }
+  },
+  "notes": [
+    "unauthenticated is the code proto/realtime/SPEC.md §13 reserves for exactly 'the connection's credential became invalid mid-connection (e.g. revoked)': retryable=false, fatal=true (closes the connection).",
+    "The device's subsequent HTTP requests also 401 (its token hash no longer resolves to a live devices row) — revocation cuts it off on both transports at once.",
+    "Caller here is the owner device from create-space.json revoking the viewer device from join.json."
+  ]
+}

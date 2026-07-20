@@ -1,0 +1,78 @@
+{
+  "description": "POST /v1/tasks/:id/log — a source uplink (source OR owner, since owner is a source-superset, P0-1; NOT viewer). Best-effort uplink of task log lines, appended to the per-task 100-line ring buffer in task_logs (v1-architecture.md §1.2.2, §3). NON-folded: does not advance space_revision, emits no delta, not on the device_seq path. Replaces the legacy /v2/ingest task.log passthrough. Paired with the GET read below.",
+
+  "post_lines": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/tasks/build-release-3.2/log",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+        "content-type": "application/json"
+      },
+      "body": {
+        "lines": [
+          "[12:00:01] linking libfoo.a",
+          "[12:00:02] linking libbar.a",
+          "[12:00:03] warning: unused symbol _dead_code"
+        ]
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": { "ok": true }
+    },
+    "note": "Authenticated as the OWNER device dev_own_8f2a1c (owner_token from create-space.json) — the same device that uplinks events in events-post-ack.json. owner is a source-superset (P0-1), so it may POST log lines just as a `source` device may; a `viewer` token would get 403 (see error_403_viewer_cannot_post). This is a source uplink, the mirror image of POST /v1/events (v1-architecture.md §3)."
+  },
+
+  "read_back_get": {
+    "request": {
+      "method": "GET",
+      "path": "/v1/tasks/build-release-3.2/log",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7"
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": [
+        "[12:00:01] linking libfoo.a",
+        "[12:00:02] linking libbar.a",
+        "[12:00:03] warning: unused symbol _dead_code"
+      ]
+    },
+    "note": "GET is viewer/owner (the viewer token from join.json here); the ring buffer holds at most the last 100 lines (TASK_LOG_WINDOW), oldest first."
+  },
+
+  "error_403_viewer_cannot_post": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/tasks/build-release-3.2/log",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7",
+        "content-type": "application/json"
+      },
+      "body": { "lines": ["viewer should not be able to write this"] }
+    },
+    "response": {
+      "status": 403,
+      "body": { "error": "forbidden" }
+    },
+    "note": "A viewer token resolves fine but the viewer role is not permitted to POST log lines — only source (and owner, as a source-superset) may uplink."
+  },
+
+  "error_400_empty_lines": {
+    "request": {
+      "method": "POST",
+      "path": "/v1/tasks/build-release-3.2/log",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+        "content-type": "application/json"
+      },
+      "body": { "lines": [] }
+    },
+    "response": {
+      "status": 400,
+      "body": { "error": "lines[] required" }
+    }
+  }
+}

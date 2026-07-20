@@ -9,5 +9,6 @@
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["worker-configuration.d.ts", "src/**/*.ts", "test/**/*.ts"]
+  "include": ["worker-configuration.d.ts", "src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["test/workers/**/*"]
 }

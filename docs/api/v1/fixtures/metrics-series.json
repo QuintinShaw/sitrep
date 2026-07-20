@@ -1,0 +1,31 @@
+{
+  "description": "GET /v1/metrics/:id/series — role: viewer/owner. Reads the persistent, tiered metric_series table (v1-architecture.md §1.2.1) — durable across DO eviction, non-folded (never bumps space_revision). Response is MetricSeriesPoint[] (openapi.yaml #/components/schemas/MetricSeriesPoint).",
+  "request": {
+    "method": "GET",
+    "path": "/v1/metrics/cpu.load1/series?range=1h",
+    "headers": {
+      "authorization": "Bearer sr1_k7m3qzx2vt_05b971d953ce184904e159f6886091b6216155fc8b35b6e7"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": [
+      { "ts": 1784476620000, "value": 1.98 },
+      { "ts": 1784476680000, "value": 2.11 },
+      { "ts": 1784476740000, "value": 2.34 },
+      { "ts": 1784476800000, "value": 2.34 }
+    ]
+  },
+  "error_response_400_invalid_range": {
+    "request_path": "/v1/metrics/cpu.load1/series?range=99y",
+    "response": {
+      "status": 400,
+      "body": { "error": "invalid range" }
+    },
+    "note": "range must be one of 1h | 6h | 1d | 1w | 1m | 1y (the frozen SERIES_RANGES). Short ranges read the raw tier (720-point cap); 1w/1m read hourly (768-bucket cap); 1y reads daily (400-bucket cap)."
+  },
+  "notes": [
+    "Points are oldest-first, one per bucket, each carrying the bucket's last value. This is derived history — a metric.frame append writes it best-effort and NEVER increments space_revision (v1-architecture.md §1.2.1, §7.2).",
+    "Unlike GET /v1/metrics/:id (the in-memory best-effort cache), this survives DO eviction because metric_series is a durable table."
+  ]
+}

@@ -1,0 +1,170 @@
+{
+  "description": "POST /v1/events — authenticated as the OWNER device dev_own_8f2a1c (owner_token from create-space.json). This is the P0-1 path: owner is a source-superset, so the space-creating Mac reports its own tasks/metrics/messages here (previously a 403 dead end). A batch of two reliable events (task.event, message.event) plus one best-effort metric.frame in one request, showing the shared-ingest ACK shape including a piggybacked reverse-control command: v1-architecture.md §3/§4.1, openapi.yaml #/components/schemas/EventsResponse. The envelope shape (type/id/ts/body) is proto/realtime/envelope.schema.json verbatim. This fixture also demonstrates P0-5 fetch-then-ack command delivery — see retry_fixture and ack_fixture below.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/events",
+    "headers": {
+      "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+      "content-type": "application/json"
+    },
+    "body": {
+      "events": [
+        {
+          "type": "task.event",
+          "id": "01J8X9K2QYTF6R3N7P5M0V8W2Z",
+          "ts": 1784476800123,
+          "body": {
+            "device_id": "dev_own_8f2a1c",
+            "device_seq": 42,
+            "task_id": "build-release-3.2",
+            "kind": "progress",
+            "occurred_at": 1784476800100,
+            "percent": 67,
+            "step": "linking"
+          }
+        },
+        {
+          "type": "message.event",
+          "id": "01J8X9K2R05GK1E9T4H8B2C6XM",
+          "ts": 1784476800130,
+          "body": {
+            "device_id": "dev_own_8f2a1c",
+            "device_seq": 43,
+            "message_id": "msg_7a3f9c1e",
+            "level": "warn",
+            "text": "disk usage above 85% during build",
+            "occurred_at": 1784476800100
+          }
+        },
+        {
+          "type": "metric.frame",
+          "id": "01J8X9K2R2Q4T8N6W1V3B7C9YP",
+          "ts": 1784476800140,
+          "body": {
+            "device_id": "dev_own_8f2a1c",
+            "metrics": [
+              { "metric_id": "cpu.load1", "value": "2.34", "ts": 1784476800100 }
+            ]
+          }
+        }
+      ],
+      "for_task_id": "build-release-3.2"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "space_revision": 129,
+      "acked": [
+        { "device_id": "dev_own_8f2a1c", "device_seq": 42 },
+        { "device_id": "dev_own_8f2a1c", "device_seq": 43 }
+      ],
+      "results": [
+        { "index": 0, "type": "task.event", "status": "applied", "device_seq": 42, "revision": 128 },
+        { "index": 1, "type": "message.event", "status": "applied", "device_seq": 43, "revision": 129 },
+        { "index": 2, "type": "metric.frame", "status": "applied" }
+      ],
+      "commands": [
+        {
+          "command_id": "01J8XB2M7K4N9P1R6WZ3Q7T5CY",
+          "origin": "viewer",
+          "action": "pause",
+          "task_id": "build-release-3.2",
+          "ttl_ms": 60000,
+          "origin_ts": 1784476799000
+        }
+      ]
+    },
+    "note": "The `commands` array is the reverse-control channel for this HTTP source: a viewer had POSTed `pause` to /v1/tasks/build-release-3.2/commands, which enqueued a CommandStore row with target_device_id = tasks.owning_device_id for that task (P0-3). Because dev_own_8f2a1c is the device that started build-release-3.2 (its owning device), this uplink is the correct recipient and reads it. P0-5 (fetch-then-ack): this response's `delivered` is still 0 after this call — inclusion in `commands[]` is a delivery HINT, not delivery itself. `delivered` flips to 1 only later, when dev_own_8f2a1c sends `01J8XB2M7K4N9P1R6WZ3Q7T5CY` in a request's `ack_command_ids`, and only after it has durably handed the pause off to its local process controller (see ack_fixture below). Until then this same command_id keeps reappearing on every poll from this device (see retry_fixture below) — that is intentional at-least-once redelivery, safe because pause/resume/stop are idempotent. Each entry is the WS `command` envelope body shape (purely task-scoped: pause/resume/stop with task_id — never run_now/automation_id).",
+    "task_scoping_note": "The command is addressed to this device (target_device_id = dev_own_8f2a1c, the task's owner) AND the request set for_task_id: 'build-release-3.2', so the response drains ONLY that task's commands. If dev_own_8f2a1c were also running a concurrent process for 'deploy-staging', that process's separate POST (for_task_id: 'deploy-staging') would receive deploy-staging's commands; this pause is never consumed by the wrong process (v1-architecture.md §1.4, §4.1, P0-3)."
+  },
+  "heartbeat_poll_with_command": {
+    "description": "An HTTP-only source (short-lived `sitrep run`) that has nothing to report still POSTs an empty events[] heartbeat purely to poll for reverse-control commands — the v1 equivalent of the legacy /v2/ingest reply-piggyback. Here a pending `stop` is read.",
+    "request": {
+      "method": "POST",
+      "path": "/v1/events",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+        "content-type": "application/json"
+      },
+      "body": { "events": [], "for_task_id": "build-release-3.2" }
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "space_revision": 129,
+        "acked": [],
+        "results": [],
+        "commands": [
+          {
+            "command_id": "01J8XB3P0R2K4N8W1V6ZQ9T7CY",
+            "origin": "viewer",
+            "action": "stop",
+            "task_id": "build-release-3.2",
+            "ttl_ms": 60000,
+            "origin_ts": 1784476805000
+          }
+        ]
+      }
+    },
+    "note": "No events applied (space_revision unchanged, acked/results empty), but the pending `stop` command is read on the heartbeat. When nothing is queued the server omits `commands` or returns []. Under P0-5 fetch-then-ack, this `stop` will be read again on the NEXT heartbeat too, unacked — it does not go away on its own until this device sends `01J8XB3P0R2K4N8W1V6ZQ9T7CY` in `ack_command_ids`, or it expires past origin_ts + ttl_ms."
+  },
+  "retry_fixture": {
+    "description": "Resending the exact same batch (e.g. the HTTP response above was lost in transit — the exact scenario an external review live-reproduced against real workerd) is always safe — dedup is keyed on (device_id, device_seq), not on anything about the HTTP request. This is what the client's retry should expect back.",
+    "request_body": "identical to the request above, byte for byte (no ack_command_ids — this device has not yet durably handed the pause off locally)",
+    "response": {
+      "status": 200,
+      "body": {
+        "space_revision": 129,
+        "acked": [
+          { "device_id": "dev_own_8f2a1c", "device_seq": 42 },
+          { "device_id": "dev_own_8f2a1c", "device_seq": 43 }
+        ],
+        "results": [
+          { "index": 0, "type": "task.event", "status": "duplicate", "device_seq": 42, "revision": 128 },
+          { "index": 1, "type": "message.event", "status": "duplicate", "device_seq": 43, "revision": 129 },
+          { "index": 2, "type": "metric.frame", "status": "stale" }
+        ],
+        "commands": [
+          {
+            "command_id": "01J8XB2M7K4N9P1R6WZ3Q7T5CY",
+            "origin": "viewer",
+            "action": "pause",
+            "task_id": "build-release-3.2",
+            "ttl_ms": 60000,
+            "origin_ts": 1784476799000
+          }
+        ]
+      }
+    },
+    "note": "P0-5 fetch-then-ack, the fix for the live-reproduced bug: space_revision is unchanged (129, not 131) because neither reliable event was re-applied, and the metric.frame sample is 'stale' on replay because its ts (1784476800100) is not newer than the cached ts from the first request — that part is unchanged from before. But `commands` is NOT empty this time: the pause command from the first response is still delivered=0 (this device never acked it), so it is included again, byte-for-byte identical to the first response's entry. This is the direct fix for the bug an external review live-reproduced against real workerd: two polls, first shows the command, the response is dropped by a simulated network failure, second poll used to show `commands: []` (permanently lost); now it correctly shows the command again. A client that already durably handed this command off locally on the first response simply ignores the duplicate delivery (command_id is the local-execution idempotency key) and, on its NEXT request, sends `ack_command_ids: [\"01J8XB2M7K4N9P1R6WZ3Q7T5CY\"]` — see ack_fixture below."
+  },
+  "ack_fixture": {
+    "description": "The device from retry_fixture has now durably handed the pause command off to its local process controller (e.g. enqueued it for the build-release-3.2 process). It acks the command_id in its next heartbeat, in the same request as a fresh command poll.",
+    "request": {
+      "method": "POST",
+      "path": "/v1/events",
+      "headers": {
+        "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+        "content-type": "application/json"
+      },
+      "body": {
+        "events": [],
+        "for_task_id": "build-release-3.2",
+        "ack_command_ids": ["01J8XB2M7K4N9P1R6WZ3Q7T5CY"]
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "space_revision": 129,
+        "acked": [],
+        "results": []
+      }
+    },
+    "note": "The server applies `ack_command_ids` FIRST — setting pending_commands.delivered = 1 for 01J8XB2M7K4N9P1R6WZ3Q7T5CY, since it is owned by this authenticated device — and only THEN computes this response's `commands[]`. Because that was the only pending command for this device/task, and it was just acked in this same request, `commands` is correctly omitted here (v1-architecture.md §1.4, §4.1). Any further heartbeat from this device, with or without an ack, will never see 01J8XB2M7K4N9P1R6WZ3Q7T5CY again — `delivered` is terminal. An ack for a command_id that is unknown, already acked, expired, or owned by a different device would have been silently ignored rather than erroring — acking is idempotent and safe to include on every request speculatively."
+  }
+}

@@ -7,6 +7,12 @@ struct StatusPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // N1: a local telemetry storage anomaly means task/metric events
+            // may be silently dropped before they ever reach the server — the
+            // most important thing to say, so it sits above everything else.
+            if let telemetryError = model.telemetryStorageError {
+                TelemetryStorageWarningRow(reason: telemetryError)
+            }
             if !model.configured {
                 ContentUnavailableView(
                     "Not configured",
@@ -59,6 +65,38 @@ struct StatusPanel: View {
         }
         .padding(12)
         .frame(width: 300)
+    }
+}
+
+/// N1: a clear, hard-to-miss banner for a daemon-reported local telemetry
+/// storage anomaly (`device_seq` outbox DB unwritable). Red so it reads as an
+/// alarm, not a passing hint — the user is silently losing task reports.
+struct TelemetryStorageWarningRow: View {
+    let reason: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("本地遥测存储异常")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.red)
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("任务上报可能正在丢失，请检查磁盘空间或权限。")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
     }
 }
 

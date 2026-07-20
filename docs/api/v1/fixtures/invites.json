@@ -1,0 +1,27 @@
+{
+  "description": "POST /v1/invites — role: viewer/owner. Mints a single-use, 10-minute invite code for a viewer or source device to redeem via POST /v1/join. P0-6 self-routing (v1-architecture.md §10.5): the returned `code` is the full 21-char layout — this SpaceHub's own space_id (k7m3qzx2vt, already known — it's the space answering this request) prefixed to a freshly generated one-time secret, packed 'X' + space_id(10) + secret(9) + 'Z'. Matches openapi.yaml #/paths/~1v1~1invites/post and v1-architecture.md §2.2/§3/§10.5.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/invites",
+    "headers": {
+      "authorization": "Bearer sr1_k7m3qzx2vt_0a47bf1ebf9b6cef76cef2f33d48189f29ea1a552bceaf51",
+      "content-type": "application/json"
+    },
+    "body": {
+      "role": "viewer"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": "XK7M3QZX2VTQ7T9M2K4NZ",
+      "expires_in": 600,
+      "space_id": "k7m3qzx2vt"
+    }
+  },
+  "notes": [
+    "The minted code is what a joining device passes to POST /v1/join (see join.json — this is the same code, and join.json's `space` field is exactly this response's `space_id`). expires_in is seconds (600 = 10 minutes); the code (and the underlying DeviceRegistry.invites row, keyed by the embedded secret) is single-use and deleted on redemption.",
+    "role defaults to 'viewer' if omitted; 'source' mints a code for a device that will emit events. Only these two roles are invitable — 'owner' is not, since the space's owner device is created at POST /v1/spaces time, and there is no admin role in v1 (v1-architecture.md §3, §10.4).",
+    "The joining device no longer needs a separate KV-backed lookup to discover this space (v1-architecture.md §1, §10.5, P0-6) — space_id is embedded directly in `code`'s first 10 payload characters, so decoding the code alone yields both the routable space and the one-time secret. This is a deliberate change from the R1 draft's opaque, KV-routed code."
+  ]
+}

@@ -1,0 +1,1106 @@
+openapi: 3.1.0
+info:
+  title: Sitrep v1 API
+  version: 1.0.0
+  description: |
+    Frozen v1 HTTP API for Sitrep. Companion to `docs/design/v1-architecture.md`
+    (the authoritative narrative contract) and `docs/design/v1-apns-outbox.md`.
+    This file is the machine-checkable reference for per-field request/response
+    **shapes** (types, presence, enums, string patterns). It is NOT the
+    authority for cross-field / conditional constraints on the event bodies —
+    e.g. "`task.event{kind:"progress"}` requires `percent`", the seconds-vs-ms
+    timestamp bound, or the `command` action↔object-field matrix. Those live in
+    `proto/realtime/*.schema.json` and its runtime mirror `parseEnvelope` /
+    `guards.ts`, which are authoritative for such rules; the component schemas
+    below intentionally do not re-encode every one of them.
+
+    Every route resolves exactly one `SpaceHub` Durable Object per space
+    (`docs/design/v1-architecture.md` §0/§1). `POST /v1/events` and
+    `GET /v1/realtime` (the WebSocket upgrade) share one ingest path and carry
+    the event envelopes defined in `proto/realtime/` verbatim — the schemas
+    below for `TaskEventBody`, `MessageEventBody`, `MetricFrameBody`,
+    `AutomationState`, etc. are field-for-field mirrors of
+    `proto/realtime/messages/*.schema.json` and `proto/realtime/common.schema.json`.
+
+    Authentication: a bearer token of the form `sr1_<space_id>_<secret>`
+    (§10 of `v1-architecture.md`). `POST /v1/spaces` and `POST /v1/join` are
+    the only unauthenticated routes.
+servers:
+  - url: https://sitrep.quintinshaw.com
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: control-plane
+    description: Space/device/credential lifecycle — pairing, invites, revocation, push-token registration.
+  - name: state-plane
+    description: Task/metric/message/automation state — reads and writes against the one SpaceHub per space.
+
+paths:
+  # ---------------------------------------------------------------------
+  # Control plane
+  # ---------------------------------------------------------------------
+
+  /v1/spaces:
+    post:
+      operationId: createSpace
+      tags: [control-plane]
+      summary: Create a space and its owner device/token
+      security: []
+      x-roles: { source: false, viewer: false, owner: false, unauthenticated: true }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                platform: { type: string, maxLength: 20, default: macos }
+                name: { type: string, maxLength: 60 }
+      responses:
+        "200":
+          description: Space created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [space_id, device_id, owner_token]
+                properties:
+                  space_id: { $ref: "#/components/schemas/SpaceId" }
+                  device_id:
+                    type: string
+                    description: "The owner device's id (minted + persisted server-side). device_seq is scoped to (device_id, space), so the creating Mac must know this to report events (v1-architecture.md §2.2, P0-1)."
+                  owner_token: { $ref: "#/components/schemas/BearerToken" }
+        "403":
+          description: Space creation disabled on this deployment.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "503":
+          description: Transient store failure; safe to retry (not idempotent — check whether the first attempt already landed before retrying, per v1-architecture.md §6).
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /v1/join:
+    post:
+      operationId: joinSpace
+      tags: [control-plane]
+      summary: Redeem an invite code, mint a device + token
+      description: |
+        P0-6 self-routing (v1-architecture.md §1, §10.5): `space` is now
+        REQUIRED — the Worker routes directly to that space's SpaceHub
+        (`env.SPACE_HUB.getByName(space)`) with zero KV lookup. For the
+        connect-code join path the client derives `space` by decoding
+        `code` locally (§10.5's byte layout); for the self-host deep-link
+        path (`sitrep://join?server&space&code`) it was already carried
+        explicitly. Both paths now send the identical `{code, space}` shape.
+        The server independently re-decodes `code` and 400s if its embedded
+        space_id does not match the routed `space` (defense in depth).
+      security: []
+      x-roles: { source: false, viewer: false, owner: false, unauthenticated: true }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, space]
+              properties:
+                code: { $ref: "#/components/schemas/ConnectCode" }
+                space: { $ref: "#/components/schemas/SpaceId" }
+                name: { type: string, maxLength: 60 }
+                platform: { type: string, maxLength: 20 }
+      responses:
+        "200":
+          description: Joined.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, device_id, role, space_id]
+                properties:
+                  token: { $ref: "#/components/schemas/BearerToken" }
+                  device_id: { type: string }
+                  role: { type: string, enum: [viewer, source] }
+                  space_id: { $ref: "#/components/schemas/SpaceId" }
+        "400":
+          description: Malformed code, or code's embedded space_id does not match the space field (v1-architecture.md §10.5).
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "404":
+          description: Invite invalid, expired, or already redeemed.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /v1/invites:
+    post:
+      operationId: createInvite
+      tags: [control-plane]
+      summary: Mint a single-use, 10-minute invite code
+      description: |
+        The returned `code` is the full 21-char self-routing layout
+        (v1-architecture.md §10.5): this SpaceHub's own space_id
+        (already known) prefixed to a freshly generated one-time secret,
+        packed as 'X' + space_id(10) + secret(9) + 'Z'. P0-6: no KV
+        involvement — the invite row lives in this SpaceHub's own
+        DeviceRegistry.invites, keyed by the secret.
+      x-roles: { source: false, viewer: true, owner: true }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [viewer, source], default: viewer }
+      responses:
+        "200":
+          description: Invite minted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, expires_in, space_id]
+                properties:
+                  code: { $ref: "#/components/schemas/ConnectCode" }
+                  expires_in: { type: integer, description: seconds, example: 600 }
+                  space_id: { $ref: "#/components/schemas/SpaceId" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/devices:
+    get:
+      operationId: listDevices
+      tags: [control-plane]
+      summary: List paired devices
+      x-roles: { source: false, viewer: true, owner: true }
+      responses:
+        "200":
+          description: Devices in this space.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DeviceInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/devices/{id}:
+    delete:
+      operationId: revokeDevice
+      tags: [control-plane]
+      summary: Revoke a device (its token stops resolving on next request)
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Revoked.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Ok" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/devices/self/push-tokens:
+    put:
+      operationId: registerOwnPushTokens
+      tags: [control-plane]
+      summary: Register the caller's own device-level APNs tokens
+      description: |
+        Replaces `POST /v2/devices`. The target device is always the
+        authenticated caller resolved from the bearer token — there is no
+        `device_id` field in the body (v1-architecture.md §2.3).
+      x-roles: { source: false, viewer: true, owner: true }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                push_to_start_token: { type: string, description: "Device-level ActivityKit push-to-start token." }
+                alert_token: { type: string, description: "Device-level APNs alert token." }
+      responses:
+        "200":
+          description: Registered.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Ok" } }
+        "400":
+          description: Neither token field supplied.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/tasks/{id}/live-activity-token:
+    put:
+      operationId: registerLiveActivityToken
+      tags: [control-plane]
+      summary: Register the caller's per-activity Live Activity update token for one task
+      description: |
+        Replaces `POST /v2/activities`. Path carries the task id; the caller
+        (a viewer/owner device running the Live Activity) is the
+        implicit registrant. One row per `task_id` — a second registrant
+        replaces the first (v1-architecture.md §1.1, known limitation).
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Registered.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Ok" } }
+        "400":
+          description: Missing token.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---------------------------------------------------------------------
+  # State plane
+  # ---------------------------------------------------------------------
+
+  /v1/realtime:
+    get:
+      operationId: openRealtimeConnection
+      tags: [state-plane]
+      summary: WebSocket upgrade carrying proto/realtime/SPEC.md verbatim
+      description: |
+        Requires the `Upgrade: websocket` header. Trusted `device_id` is
+        resolved server-side from the bearer token before this handler runs.
+        The realtime-protocol role is DECLARED by the client in its
+        hello{stage:offer} and CONSTRAINED by the token (P0-1): a source-token
+        may present only `source`, a viewer-token only `viewer`, and an
+        owner-token EITHER `source` (to run/report a task) or `viewer` (to
+        observe). It is no longer a fixed HTTP-role-to-WS-role mapping
+        (v1-architecture.md §4).
+      x-roles: { source: true, viewer: true, owner: true }
+      responses:
+        "101":
+          description: Switching Protocols — WebSocket established.
+        "400":
+          description: Missing/invalid upgrade request, or no paired device identity on the resolved token.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "426":
+          description: Non-WebSocket request to this endpoint.
+        "503": { $ref: "#/components/responses/TransportUnavailable" }
+
+  /v1/events:
+    post:
+      operationId: postEvents
+      tags: [state-plane]
+      summary: HTTP ingest for device-uplinked events (shared SpaceHub ingest path)
+      description: |
+        Reuses the exact same ingest function as `GET /v1/realtime`'s
+        `task.event`/`message.event`/`metric.frame` handling — same
+        `device_seq` dedup, same fold rules, same authorization
+        (v1-architecture.md §4). Safe to retry unconditionally: dedup is
+        keyed on `(device_id, device_seq)`, not on anything about the HTTP
+        request. Max 500 envelopes per request. owner may call this too —
+        owner is a source-superset (v1-architecture.md §3, P0-1). Also the
+        fetch-then-ack reverse-control channel (P0-5, v1-architecture.md
+        §1.4/§4.1): `ack_command_ids` in the request is processed before
+        `commands[]` in the response is computed, in the same request.
+      x-roles: { source: true, viewer: false, owner: true }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EventsRequest" }
+      responses:
+        "200":
+          description: Batch processed (per-item outcomes in `results`; the request itself parsed successfully even if some items were rejected).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EventsResponse" }
+        "400":
+          description: 'Request body is not valid JSON, or is not `{"events": [...]}`.'
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/snapshot:
+    get:
+      operationId: getSnapshot
+      tags: [state-plane]
+      summary: Full folded state + space_revision + transport capabilities
+      x-roles: { source: false, viewer: true, owner: true }
+      responses:
+        "200":
+          description: Snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Snapshot" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/metrics/{id}:
+    get:
+      operationId: getMetric
+      tags: [state-plane]
+      summary: Current folded state of one metric (persistent)
+      description: |
+        Reads the persistent `metrics_current` table (v1-architecture.md
+        §1.2.0, P0-2) — survives DO eviction, so the last accepted value is
+        never lost. Not revisioned (metric.frame stays non-revisioned).
+        Capped at 256 distinct metric_ids per space with LRU eviction on
+        overflow (P0-7); routine samples are write-downsampled (10s,
+        per-space), but an alert edge transition always persists
+        immediately (v1-architecture.md §1.2.0).
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Last folded value for this metric.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MetricSample" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No metrics_current row — the metric was never reported, OR (only for a space that has exceeded the 256-distinct-metric_id cap) it was reported but has since been LRU-evicted to make room for a newer metric_id (v1-architecture.md §1.2.0/§13.2, P0-2/P0-7).
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /v1/metrics/{id}/series:
+    get:
+      operationId: getMetricSeries
+      tags: [state-plane]
+      summary: Historical series for one metric
+      description: |
+        Reads the persistent, tiered `metric_series` table (v1-architecture.md
+        §1.2.1) — durable, non-folded, survives DO eviction. Short ranges read
+        the raw tier; longer ones read the hourly/daily tiers.
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: range
+          in: query
+          required: false
+          schema: { type: string, enum: [1h, 6h, 1d, 1w, 1m, 1y], default: 1d }
+      responses:
+        "200":
+          description: Series points, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MetricSeriesPoint" }
+        "400":
+          description: Invalid range.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/tasks/{id}/commands:
+    post:
+      operationId: postTaskCommand
+      tags: [state-plane]
+      summary: Viewer-issued reverse control (pause/resume/stop)
+      description: |
+        Enqueued in CommandStore with `target_device_id =
+        tasks.owning_device_id` — directed to the one device running the task,
+        never broadcast (v1-architecture.md §1.4, P0-3). Delivered via WS
+        (best-effort hint only, never sets delivered) and/or the HTTP
+        for_task_id drain (`POST /v1/events` response `commands[]`, returned
+        on every poll until acked). Marked delivered ONLY when the owning
+        device sends this command_id in a later `ack_command_ids` request
+        field (P0-5 fetch-then-ack, v1-architecture.md §1.4/§4.1) — never on
+        mere inclusion in a response. The server builds the WS `command` body
+        from trusted sources: `task_id` from the path param and
+        `issued_by_device_id` from the authenticated identity, never from the
+        body (v1-architecture.md §4.4). An optional `Idempotency-Key` header
+        (or body `command_id`) maps to the WS `command_id` so a retried POST
+        does not enqueue a second command (v1-architecture.md §6).
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [pause, resume, stop] }
+                ttl_ms:
+                  type: integer
+                  minimum: 1
+                  maximum: 86400000
+                  default: 60000
+                  description: "How long the command stays actionable from send time. Optional; defaults to 60000 (matches the legacy 60s reverse-control TTL)."
+                command_id:
+                  type: string
+                  description: "Optional caller-supplied idempotency id, mapped to the WS command_id. The Idempotency-Key header serves the same purpose; supply at most one."
+      responses:
+        "200":
+          description: Enqueued or relayed to the task's owning device.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Ok" } }
+        "400":
+          description: Invalid action or out-of-range ttl_ms.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: 'Task not running: no tasks.owning_device_id for this task_id, so the command has no addressable recipient (v1-architecture.md §1.4). A server MAY return this rather than persist an unroutable command.'
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  /v1/tasks/{id}/log:
+    get:
+      operationId: getTaskLog
+      tags: [state-plane]
+      summary: Read a task's log tail
+      description: |
+        Reads the persistent per-task 100-line ring buffer in `task_logs`
+        (v1-architecture.md §1.2.2). Non-folded; durable across DO eviction.
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      responses:
+        "200":
+          description: Log lines, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: postTaskLog
+      tags: [state-plane]
+      summary: Source uplink of task log lines
+      description: |
+        Source uplink (like POST /v1/events) of best-effort log lines,
+        appended to the per-task 100-line ring buffer in `task_logs`
+        (v1-architecture.md §1.2.2). NON-folded: does not advance
+        space_revision, does not emit a delta, not on the device_seq
+        at-least-once path. Replaces the legacy /v2/ingest task.log passthrough.
+        owner may call this too — owner is a source-superset (P0-1).
+      x-roles: { source: true, viewer: false, owner: true }
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lines]
+              properties:
+                lines:
+                  type: array
+                  items: { type: string }
+                  minItems: 1
+      responses:
+        "200":
+          description: Appended (best-effort).
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Ok" } }
+        "400":
+          description: Missing or empty lines array.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/messages:
+    delete:
+      operationId: deleteAllMessages
+      tags: [state-plane]
+      summary: Clear all messages from history
+      description: |
+        The bulk-clear successor to `POST /v2/messages/delete {all:true}`.
+        Distinct from the per-message `DELETE /v1/messages/:id`.
+      x-roles: { source: false, viewer: true, owner: true }
+      responses:
+        "200":
+          description: Cleared (idempotent — clearing an already-empty history is not an error).
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Ok" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/messages/{id}:
+    delete:
+      operationId: deleteMessage
+      tags: [state-plane]
+      summary: Delete one message from history
+      description: |
+        The per-id successor to `POST /v2/messages/delete {ids:[...]}`.
+        Distinct from the clear-all `DELETE /v1/messages`.
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deleted (idempotent — deleting an already-gone id is not an error).
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Ok" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/automations:
+    get:
+      operationId: listAutomations
+      tags: [state-plane]
+      summary: List automations (source's poll-for-definitions path)
+      description: |
+        Excludes `viewer` deliberately — a viewer's automations view comes
+        from `GET /v1/snapshot`'s embedded `automations` array
+        (v1-architecture.md §3).
+      x-roles: { source: true, viewer: false, owner: true }
+      responses:
+        "200":
+          description: Automations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AutomationState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createAutomation
+      tags: [state-plane]
+      summary: Create an automation (mints config.event)
+      x-roles: { source: false, viewer: false, owner: true }
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AutomationCreateRequest" }
+      responses:
+        "200":
+          description: Created (or idempotent replay).
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/AutomationMintResult" } }
+        "400":
+          description: Missing required fields.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/IdempotencyConflict" }
+
+  /v1/automations/{id}:
+    patch:
+      operationId: patchAutomation
+      tags: [state-plane]
+      summary: Edit schedule/state (mints config.event)
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                state: { type: string, enum: [active, paused] }
+                schedule:
+                  type: object
+                  properties:
+                    every_seconds: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Updated (or idempotent replay).
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/AutomationMintResult" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No automation with this id.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "409": { $ref: "#/components/responses/IdempotencyConflict" }
+    delete:
+      operationId: deleteAutomation
+      tags: [state-plane]
+      summary: Remove an automation (mints config.event)
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Removed (or idempotent replay).
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/AutomationMintResult" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No automation with this id.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+        "409": { $ref: "#/components/responses/IdempotencyConflict" }
+
+  /v1/automations/{id}/run:
+    post:
+      operationId: runAutomation
+      tags: [state-plane]
+      summary: Trigger an automation to run now
+      description: |
+        Increments the automation's monotonic `run_request_id` counter and
+        returns 200 with no body. NOT a command: mints no config.event, does
+        not advance space_revision, enqueues nothing in CommandStore
+        (v1-architecture.md §5.1, P0-4). The resident agent, polling GET
+        /v1/automations, runs the automation when run_request_id advances
+        beyond its last-consumed, persisted cursor — no wall-clock
+        comparison. Execution is at-least-once, not exactly-once: a crash
+        between claiming and completing a run, or a local automation record
+        with no persisted cursor yet, can re-run the same run_request_id, so
+        automations must be idempotent (v1-architecture.md §5.1). An
+        optional Idempotency-Key dedups a network retry of the same tap to a
+        single increment.
+      x-roles: { source: false, viewer: true, owner: true }
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: run_request_id incremented. No response body.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No automation with this id.
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "sr1_<space_id>_<secret>"
+      description: See v1-architecture.md §10 for the full grammar and security model.
+
+  parameters:
+    DeviceId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    TaskId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string }
+      description: Optional. See v1-architecture.md §4.2/§6.
+
+  responses:
+    Unauthorized:
+      description: Bearer token missing, malformed, or does not resolve to a live device (revoked).
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Error" } }
+    Forbidden:
+      description: Token resolved fine; the resolved role is not permitted on this route (v1-architecture.md §3).
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Error" } }
+    TransportUnavailable:
+      description: |
+        WS_TRANSPORT_ENABLED is off for this deployment. Never conflated
+        with 403 — the credential may be perfectly valid
+        (v1-architecture.md §8.1).
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string, enum: [transport_unavailable] }
+    IdempotencyConflict:
+      description: The supplied Idempotency-Key was already used for a different operation (fingerprint mismatch).
+      content:
+        application/json: { schema: { $ref: "#/components/schemas/Error" } }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Ok:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean, enum: [true] }
+
+    SpaceId:
+      type: string
+      pattern: "^[a-z0-9]{1,16}$"
+
+    BearerToken:
+      type: string
+      pattern: "^sr1_[a-z0-9]{1,16}_[a-f0-9]{48}$"
+      description: "sr1_<space_id>_<secret> — v1-architecture.md §10."
+
+    ConnectCode:
+      type: string
+      pattern: "^X[2-9A-HJ-KM-NP-Z]{19}Z$"
+      description: "'X' + space_id(10, uppercased) + secret(9) + 'Z', all from the shared 31-symbol confusable-free alphabet (digits 2-9, A-Z excluding I/L/O) — v1-architecture.md §10.5, P0-6."
+
+    DeviceInfo:
+      type: object
+      required: [id, name, role, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [owner, viewer, source] }
+        platform: { type: string }
+        created_at: { type: string, format: date-time }
+        last_seen: { type: string, format: date-time }
+
+    DisplayHints:
+      type: object
+      additionalProperties: false
+      properties:
+        icon: { type: string, maxLength: 64 }
+        tint: { type: string, maxLength: 32 }
+        template: { type: string, maxLength: 32 }
+
+    TaskState:
+      type: object
+      required: [task_id, device_id, state, updated_at]
+      properties:
+        task_id: { type: string }
+        device_id: { type: string }
+        title: { type: string, maxLength: 2048 }
+        state: { type: string, enum: [running, done, failed] }
+        percent: { type: integer, minimum: 0, maximum: 100 }
+        step: { type: string, maxLength: 2048 }
+        message: { type: string, maxLength: 2048 }
+        updated_at: { type: integer, description: "unix ms" }
+        display: { $ref: "#/components/schemas/DisplayHints" }
+
+    MetricSample:
+      type: object
+      required: [metric_id, value, ts]
+      properties:
+        metric_id: { type: string, pattern: "^[a-z0-9_.-]{1,64}$" }
+        value: { type: string, maxLength: 256 }
+        label: { type: string, maxLength: 256 }
+        ts: { type: integer, description: "unix ms" }
+        display: { $ref: "#/components/schemas/DisplayHints" }
+        target: { type: string, maxLength: 64 }
+        min: { type: string, maxLength: 64 }
+        max: { type: string, maxLength: 64 }
+        alert_above: { type: string, maxLength: 64 }
+        alert_below: { type: string, maxLength: 64 }
+
+    MetricSeriesPoint:
+      type: object
+      description: One point from the persistent metric_series table (v1-architecture.md §1.2.1). ts is the bucket timestamp; value is the bucket's last value.
+      required: [ts, value]
+      properties:
+        ts: { type: integer, description: "unix ms" }
+        value: { type: number }
+
+    MessageRecord:
+      type: object
+      required: [message_id, device_id, level, text, occurred_at]
+      properties:
+        message_id: { type: string }
+        device_id: { type: string }
+        level: { type: string, enum: [info, warn, error] }
+        text: { type: string, maxLength: 2048 }
+        occurred_at: { type: integer, description: "unix ms" }
+
+    AutomationSchedule:
+      type: object
+      required: [kind, every_seconds]
+      properties:
+        kind: { type: string, enum: [interval] }
+        every_seconds: { type: integer, minimum: 1 }
+
+    AutomationState:
+      type: object
+      required: [automation_id, name, executor_kind, schedule, state, run_request_id]
+      properties:
+        automation_id: { type: string, minLength: 1, maxLength: 128 }
+        name: { type: string, minLength: 1, maxLength: 256 }
+        executor_kind: { type: string, enum: [script, agent, hybrid] }
+        schedule: { $ref: "#/components/schemas/AutomationSchedule" }
+        state: { type: string, enum: [active, paused] }
+        last_run_at: { type: integer, description: "unix ms" }
+        run_request_id:
+          type: integer
+          minimum: 0
+          description: "Monotonic per-automation counter, incremented by POST /v1/automations/:id/run. The resident agent runs the automation when this advances beyond its last-consumed, persisted cursor (v1-architecture.md §5.1, P0-4); execution is at-least-once, not exactly-once, so automations must be idempotent. 0 = never triggered."
+        run_requested_at:
+          type: [integer, "null"]
+          description: "Optional, DISPLAY ONLY — unix ms of the most recent /run. The agent keys off run_request_id, never this timestamp. Null/absent if never or if the server omits it."
+
+    AutomationCreateRequest:
+      type: object
+      required: [name, executor_kind, schedule]
+      properties:
+        automation_id: { type: string, description: "Optional; derived from Idempotency-Key if omitted (v1-architecture.md §4.2)." }
+        name: { type: string, maxLength: 256 }
+        executor_kind: { type: string, enum: [script, agent, hybrid] }
+        schedule:
+          type: object
+          required: [every_seconds]
+          properties:
+            every_seconds: { type: integer, minimum: 1 }
+        state: { type: string, enum: [active, paused], default: active }
+
+    AutomationMintResult:
+      type: object
+      required: [revision, automation]
+      properties:
+        revision: { type: integer, description: "space_revision after this mint (or the original mint's revision, on an idempotent replay)." }
+        automation:
+          oneOf:
+            - { $ref: "#/components/schemas/AutomationState" }
+            - type: "null"
+
+    Capabilities:
+      type: object
+      required: [ws_transport_enabled, apns_delivery_enabled, protocol_versions]
+      properties:
+        ws_transport_enabled: { type: boolean }
+        apns_delivery_enabled: { type: boolean }
+        protocol_versions:
+          type: array
+          items: { type: integer }
+          example: [1]
+
+    Presence:
+      type: object
+      description: Non-folded status markers, outside space_revision accounting (v1-architecture.md §7.1).
+      required: [sources_online]
+      properties:
+        ingest_last_seen:
+          type: integer
+          description: "unix ms of the most recent device uplink (WS or HTTP); absent if the space has never received one."
+        agent_last_seen:
+          type: integer
+          description: "unix ms of the most recent agent heartbeat; absent if never seen."
+        sources_online:
+          type: integer
+          description: "count of source devices with a currently-open live WS; always 0 when WS_TRANSPORT_ENABLED is off."
+
+    Snapshot:
+      type: object
+      required: [space_revision, generated_at, capabilities, presence, tasks, metrics, messages, automations]
+      properties:
+        space_revision: { type: integer }
+        generated_at: { type: string, format: date-time }
+        capabilities: { $ref: "#/components/schemas/Capabilities" }
+        presence: { $ref: "#/components/schemas/Presence" }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/TaskState" }
+        metrics:
+          type: array
+          items: { $ref: "#/components/schemas/MetricSample" }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/MessageRecord" }
+        automations:
+          type: array
+          items: { $ref: "#/components/schemas/AutomationState" }
+
+    TaskEventBody:
+      type: object
+      required: [device_id, device_seq, task_id, kind, occurred_at]
+      properties:
+        device_id: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" }
+        device_seq: { type: integer, minimum: 1 }
+        task_id: { type: string, minLength: 1, maxLength: 256 }
+        kind: { type: string, enum: [started, progress, step, done, failed] }
+        occurred_at: { type: integer, description: "unix ms" }
+        title: { type: string, maxLength: 2048 }
+        percent: { type: integer, minimum: 0, maximum: 100 }
+        step: { type: string, maxLength: 2048 }
+        message: { type: string, maxLength: 2048 }
+        display: { $ref: "#/components/schemas/DisplayHints" }
+
+    MessageEventBody:
+      type: object
+      required: [device_id, device_seq, message_id, level, text, occurred_at]
+      properties:
+        device_id: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" }
+        device_seq: { type: integer, minimum: 1 }
+        message_id: { type: string, minLength: 1, maxLength: 128 }
+        level: { type: string, enum: [info, warn, error] }
+        text: { type: string, maxLength: 2048 }
+        occurred_at: { type: integer, description: "unix ms" }
+        automation_id: { type: string, maxLength: 128 }
+
+    MetricFrameBody:
+      type: object
+      required: [device_id, metrics]
+      properties:
+        device_id: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" }
+        metrics:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: { $ref: "#/components/schemas/MetricSample" }
+
+    EventEnvelope:
+      type: object
+      required: [type, id, ts, body]
+      description: |
+        Mirrors proto/realtime/envelope.schema.json. Only these three
+        `type`s are meaningful on POST /v1/events; any other type is
+        rejected (v1-architecture.md §4).
+      properties:
+        type: { type: string, enum: [task.event, message.event, metric.frame] }
+        id: { type: string, pattern: "^[A-Za-z0-9_-]{1,64}$" }
+        ts: { type: integer, description: "unix ms, envelope send time" }
+        body:
+          oneOf:
+            - { $ref: "#/components/schemas/TaskEventBody" }
+            - { $ref: "#/components/schemas/MessageEventBody" }
+            - { $ref: "#/components/schemas/MetricFrameBody" }
+
+    EventsRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 0
+          maxItems: 500
+          description: "May be empty ([]) for a pure command-poll heartbeat (v1-architecture.md §4.1)."
+          items: { $ref: "#/components/schemas/EventEnvelope" }
+        for_task_id:
+          type: string
+          description: |
+            Optional. The task_id this uplink's process owns. Scopes the
+            response `commands[]` to just that task (plus broadcast commands);
+            commands for other tasks are not drained by this request
+            (v1-architecture.md §1.4, §4.1). Omit for a general source with no
+            task partitioning (e.g. the resident agent). Does not affect event
+            application.
+        ack_command_ids:
+          type: array
+          items: { type: string }
+          description: |
+            Optional (P0-5, fetch-then-ack). command_ids the device has
+            durably handed off to its local process controller since it last
+            acked (v1-architecture.md §1.4, §4.1) — receiving a command is not
+            sufficient grounds to ack it; only a successful local handoff is.
+            Processed BEFORE this response's `commands[]` is computed, so a
+            request that both acks and polls never gets back what it just
+            acked. An id that is unknown, not owned by this device, already
+            acked, or expired is silently ignored (idempotent no-op).
+
+    AckedPair:
+      type: object
+      required: [device_id, device_seq]
+      properties:
+        device_id: { type: string }
+        device_seq: { type: integer }
+
+    EventResult:
+      type: object
+      required: [index, type, status]
+      properties:
+        index: { type: integer, description: "position in the request's events array" }
+        type: { type: string, enum: [task.event, message.event, metric.frame] }
+        status: { type: string, enum: [applied, duplicate, stale, rejected] }
+        device_seq: { type: integer }
+        revision: { type: integer, description: "space_revision this event landed at (reliable events only)" }
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+
+    PendingCommand:
+      type: object
+      description: |
+        A reverse-control command drained from CommandStore for the
+        authenticated HTTP source (v1-architecture.md §1.4, §4.1). Shaped like
+        the WS `command` envelope body (proto/realtime command.schema.json).
+        P0-5 fetch-then-ack: inclusion here does NOT mark it delivered — it
+        is returned on every poll from this device until the device acks it
+        via a later request's `ack_command_ids` (or it expires). command_id
+        is the local-execution idempotency key regardless of ack state.
+      required: [command_id, origin, action, task_id, ttl_ms, origin_ts]
+      properties:
+        command_id: { type: string }
+        origin: { type: string, enum: [viewer] }
+        action: { type: string, enum: [pause, resume, stop] }
+        task_id: { type: string }
+        ttl_ms: { type: integer, description: "measured from origin_ts; same 60s reverse-control TTL" }
+        origin_ts: { type: integer, description: "unix ms; the viewer's original send time" }
+
+    EventsResponse:
+      type: object
+      required: [space_revision, acked, results]
+      properties:
+        space_revision: { type: integer }
+        acked:
+          type: array
+          items: { $ref: "#/components/schemas/AckedPair" }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/EventResult" }
+        commands:
+          type: array
+          description: |
+            Optional. Pending (delivered=0, non-expired), device-and-task-
+            scoped reverse-control commands, read from CommandStore on this
+            uplink (even an empty events[] heartbeat). Omitted or [] when
+            none pending. P0-5 fetch-then-ack: included on EVERY poll until
+            the device acks the command_id via `ack_command_ids` or it
+            expires — inclusion here never by itself marks a row delivered
+            (v1-architecture.md §1.4, §4.1). The HTTP equivalent of WS
+            `command` frames — same rows, same store — but only this
+            response's paired `ack_command_ids` request field can ever
+            retire one.
+          items: { $ref: "#/components/schemas/PendingCommand" }

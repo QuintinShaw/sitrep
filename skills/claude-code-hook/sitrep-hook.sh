@@ -5,46 +5,41 @@
 #
 # Usage: sitrep-hook.sh <start|working|waiting|stop>
 #
-# Credentials: SITREP_SERVER / SITREP_TOKEN env vars, falling back to
-# ~/.config/sitrep/config.json ({"server": "...", "token": "..."}).
+# It reports THROUGH the unified `sitrep` CLI (`sitrep report`), which owns
+# device_seq allocation, the durable outbox, and the health signal — never by
+# hand-rolling raw HTTP or reimplementing device_seq in shell (the old
+# /v2/ingest path, now deleted). Credentials and the server come from the
+# CLI's own config (~/.config/sitrep/config.json or SITREP_SERVER/SITREP_TOKEN),
+# so this script needs none.
+#
+# The `sitrep` binary must be on PATH (or point SITREP_BIN at it). If it is
+# missing or not configured, this script exits 0 without blocking Claude Code.
 
 set -eu
 
 PHASE="${1:-working}"
-CONFIG="$HOME/.config/sitrep/config.json"
+SITREP="${SITREP_BIN:-sitrep}"
 
-SERVER="${SITREP_SERVER:-}"
-TOKEN="${SITREP_TOKEN:-}"
-if [ -z "$SERVER" ] && [ -f "$CONFIG" ]; then
-  SERVER=$(python3 -c "import json;print(json.load(open('$CONFIG')).get('server',''))" 2>/dev/null || true)
-  TOKEN=$(python3 -c "import json;print(json.load(open('$CONFIG')).get('token',''))" 2>/dev/null || true)
-fi
-[ -z "$SERVER" ] && exit 0 # not configured; never block Claude Code
+# Never block Claude Code: if the CLI isn't installed, do nothing.
+command -v "$SITREP" >/dev/null 2>&1 || exit 0
 
 PAYLOAD=$(cat)
 SESSION=$(printf '%s' "$PAYLOAD" | python3 -c "import json,sys;print(json.load(sys.stdin).get('session_id','unknown')[:12])" 2>/dev/null || echo unknown)
-CWD_NAME=$(printf '%s' "$PAYLOAD" | python3 -c "import json,sys;import os;print(os.path.basename(json.load(sys.stdin).get('cwd','')) or 'claude')" 2>/dev/null || echo claude)
-TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+CWD_NAME=$(printf '%s' "$PAYLOAD" | python3 -c "import json,sys,os;print(os.path.basename(json.load(sys.stdin).get('cwd','')) or 'claude')" 2>/dev/null || echo claude)
 
+TASK="cc-$SESSION"
+
+# `sitrep report` reads its own config and is a no-op when unconfigured, so a
+# failure here (unconfigured, offline, whatever) must never fail the hook.
 case "$PHASE" in
   start)
-    EV="{\"kind\":\"task.start\",\"title\":\"Claude Code · $CWD_NAME\"}" ;;
+    "$SITREP" report --task "$TASK" --kind started --title "Claude Code · $CWD_NAME" >/dev/null 2>&1 || true ;;
   waiting)
-    EV="{\"kind\":\"task.step\",\"step\":\"⏸ waiting for your input\"}" ;;
+    "$SITREP" report --task "$TASK" --kind step --step "⏸ waiting for your input" >/dev/null 2>&1 || true ;;
   stop)
-    EV="{\"kind\":\"task.done\",\"text\":\"session finished\"}" ;;
+    "$SITREP" report --task "$TASK" --kind done --text "session finished" >/dev/null 2>&1 || true ;;
   working|*)
-    EV="{\"kind\":\"task.step\",\"step\":\"working…\"}" ;;
+    "$SITREP" report --task "$TASK" --kind step --step "working…" >/dev/null 2>&1 || true ;;
 esac
 
-BODY=$(printf '%s' "$EV" | python3 -c "
-import json,sys
-ev=json.load(sys.stdin)
-ev.update({'source_id':'cc-$SESSION','ts':'$TS'})
-print(json.dumps([ev]))")
-
-curl -s -m 5 -X POST "$SERVER/v2/ingest" \
-  -H "content-type: application/json" \
-  ${TOKEN:+-H "Authorization: Bearer $TOKEN"} \
-  -d "$BODY" > /dev/null 2>&1 || true
 exit 0

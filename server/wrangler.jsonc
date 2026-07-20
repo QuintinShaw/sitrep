@@ -4,15 +4,61 @@
   "main": "src/adapters/workers.ts",
   "compatibility_date": "2026-07-18",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  // Observability: logAlways() security events (e.g. "superseded", device
+  // revocation) must never be head-sampled away, so logs.head_sampling_rate
+  // stays at 1.0 (default) and the <=1% in-code logSampler in SpaceHub is
+  // what actually bounds hot-path console.log volume. invocation_logs:false
+  // bounds the platform's own automatic per-request invocation log, emitted
+  // once per webSocketMessage/fetch regardless of what the handler logs.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": false },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  },
   "routes": [{ "pattern": "sitrep.quintinshaw.com", "custom_domain": true }],
-  "kv_namespaces": [{ "binding": "INVITE_DIR", "id": "490111734d5246cc949f0eec1c0ca0f3" }],
+  // P0-6 (v1-architecture.md §10.5): INVITE_DIR (the old code->space_id KV
+  // lookup) is deleted entirely — connect codes are now self-routing
+  // (space_id embedded directly), so joining a space touches zero KV.
   "vars": {
     "APNS_BUNDLE_ID": "dev.sitrep.app",
-    "APNS_HOST": "api.sandbox.push.apple.com"
+    "APNS_HOST": "api.sandbox.push.apple.com",
+    // Kill switches (v1-architecture.md §8). Both false by default in
+    // production; flipped per-environment at deploy time. Never coerce
+    // these with a bare `Boolean(...)` — see parseTransportFlag (§8.3).
+    "WS_TRANSPORT_ENABLED": false,
+    "APNS_DELIVERY_ENABLED": false,
+    // Public space-creation gate (5e). Enforced before any DO is created so
+    // creation can't mint unbounded DOs/storage. Explicitly true for the
+    // shipped config; the CODE defaults to fail-closed (parseTransportFlag
+    // treats absent/unparseable as false), so this flag must be present to
+    // permit creation. Flip to false to freeze new-space creation.
+    "SPACE_CREATION_ENABLED": true,
+    // Pre-launch: bounded per-IP rate limit on top of SPACE_CREATION_ENABLED
+    // (see rate-limiter.ts / adapters/workers.ts) — creates per IP per hour.
+    "SPACE_CREATION_RATE_LIMIT_PER_HOUR": 5
   },
   "durable_objects": {
-    "bindings": [{ "name": "USER_STORE", "class_name": "UserStore" }]
+    "bindings": [
+      { "name": "SPACE_HUB", "class_name": "SpaceHub" },
+      { "name": "SPACE_CREATION_RATE_LIMITER", "class_name": "SpaceCreationRateLimiter" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserStore"] }]
+  // v1-architecture.md §11 Option A (recommended): UserStore is tombstoned,
+  // not merely unbound. Tags v1/v2 are exactly what already shipped (or
+  // would have shipped as Deploy 1) and must never be edited; v3 is the new
+  // cutover tag that both deletes UserStore and introduces SpaceHub's
+  // SQLite storage in the same migration ledger entry set. This repo has no
+  // prior deploy of this Worker service, so v1/v2/v3 land together here
+  // rather than as two sequential deploys — the ledger itself is still
+  // append-only and irreversible once shipped (deleted_classes can never be
+  // undone; see §11's rollback note).
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["UserStore"] },
+    { "tag": "v2", "new_sqlite_classes": ["SpaceHub"] },
+    { "tag": "v3", "deleted_classes": ["UserStore"] },
+    // Pre-launch: the space-creation rate limiter (rate-limiter.ts) is a new
+    // Durable Object class, appended as its own migration tag rather than
+    // editing v1/v2/v3 (append-only ledger, §11's rollback note).
+    { "tag": "v4", "new_sqlite_classes": ["SpaceCreationRateLimiter"] }
+  ]
 }
